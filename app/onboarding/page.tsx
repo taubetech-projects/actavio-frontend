@@ -28,7 +28,7 @@ export interface TaskData {
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const { user, completeOnboarding } = useAuth();
+  const { user, initialized, completeOnboarding } = useAuth();
   const [currentStep, setCurrentStep] = useState<OnboardingStep>("welcome");
   const [connectedTool, setConnectedTool] = useState<string | null>(null);
   const [selectedUseCase, setSelectedUseCase] = useState<string>("follow-ups");
@@ -41,14 +41,15 @@ export default function OnboardingPage() {
   });
 
   useEffect(() => {
+    if (!initialized) return;
     if (!user) {
       router.push("/login");
     } else if (user.onboardingCompleted) {
       router.push("/dashboard");
     }
-  }, [user, router]);
+  }, [user, initialized, router]);
 
-  if (!user) {
+  if (!initialized || !user) {
     return null;
   }
 

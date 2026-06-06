@@ -5,8 +5,10 @@ import {
   useContext,
   useState,
   useCallback,
+  useEffect,
   type ReactNode,
 } from "react";
+import { authApi, tokenStore, type AuthTokenResponse, type TenantSummary } from "./api";
 
 export interface User {
   id: string;
@@ -17,61 +19,101 @@ export interface User {
   emailVerified: boolean;
   createdAt: Date;
   onboardingCompleted: boolean;
+  activeTenantId: string | null;
+  tenants: TenantSummary[];
 }
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
+  initialized: boolean;
   login: (email: string, password: string, remember: boolean) => Promise<{ success: boolean; error?: string }>;
   signup: (email: string, password: string, name: string) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
+  logout: () => Promise<void>;
   forgotPassword: (email: string) => Promise<{ success: boolean; error?: string }>;
   resetPassword: (token: string, password: string) => Promise<{ success: boolean; error?: string }>;
   resendVerification: (email: string) => Promise<{ success: boolean; error?: string }>;
-  verifyEmail: (token: string) => Promise<{ success: boolean; error?: string }>;
+  verifyEmail: (token: string) => Promise<{ success: boolean; error?: string; requiresTenantSetup?: boolean }>;
   updateUser: (updates: Partial<User>) => void;
   completeOnboarding: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-// Mock users database
-const mockUsers: Map<string, { user: User; password: string }> = new Map([
-  [
-    "demo@taskflow.com",
-    {
-      user: {
-        id: "1",
-        email: "demo@taskflow.com",
-        name: "Max Mustermann",
-        role: "user",
-        emailVerified: true,
-        createdAt: new Date("2024-01-01"),
-        onboardingCompleted: false,
-      },
-      password: "demo123",
-    },
-  ],
-  [
-    "admin@taskflow.com",
-    {
-      user: {
-        id: "2",
-        email: "admin@taskflow.com",
-        name: "Admin User",
-        role: "admin",
-        emailVerified: true,
-        createdAt: new Date("2024-01-01"),
-        onboardingCompleted: true,
-      },
-      password: "admin123",
-    },
-  ],
-]);
+const REFRESH_TOKEN_KEY = "actavio_refresh_token";
+const USER_NAME_KEY = "actavio_user_name";
+const PENDING_NAME_KEY = "actavio_pending_name";
+const ONBOARDING_KEY = "actavio_onboarding_done";
+
+function buildUser(res: AuthTokenResponse, name: string): User {
+  const activeTenant = res.tenants.find((t) => t.id === res.activeTenantId);
+  const onboardingDone =
+    localStorage.getItem(ONBOARDING_KEY) === "true" || !res.requiresTenantSetup;
+
+  return {
+    id: res.user.id,
+    email: res.user.email,
+    name,
+    role: activeTenant?.role === "TENANT_ADMIN" ? "admin" : "user",
+    emailVerified: res.user.emailVerified,
+    createdAt: new Date(),
+    onboardingCompleted: onboardingDone,
+    activeTenantId: res.activeTenantId,
+    tenants: res.tenants,
+  };
+}
+
+function storeTokens(res: AuthTokenResponse) {
+  tokenStore.setAccessToken(res.accessToken);
+  localStorage.setItem(REFRESH_TOKEN_KEY, res.refreshToken);
+}
+
+function clearTokens() {
+  tokenStore.setAccessToken(null);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [initialized, setInitialized] = useState(false);
+
+  // Register the 401 auto-refresh handler once
+  useEffect(() => {
+    tokenStore.setRefreshHandler(async () => {
+      const rt = localStorage.getItem(REFRESH_TOKEN_KEY);
+      if (!rt) return null;
+      try {
+        const res = await authApi.refresh(rt);
+        storeTokens(res);
+        const name = localStorage.getItem(USER_NAME_KEY) || res.user.email.split("@")[0];
+        setUser(buildUser(res, name));
+        return res.accessToken;
+      } catch {
+        clearTokens();
+        setUser(null);
+        return null;
+      }
+    });
+  }, []);
+
+  // Restore session from stored refresh token on mount
+  useEffect(() => {
+    const rt = localStorage.getItem(REFRESH_TOKEN_KEY);
+    if (!rt) {
+      setInitialized(true);
+      return;
+    }
+    authApi
+      .refresh(rt)
+      .then((res) => {
+        storeTokens(res);
+        const name = localStorage.getItem(USER_NAME_KEY) || res.user.email.split("@")[0];
+        setUser(buildUser(res, name));
+      })
+      .catch(() => clearTokens())
+      .finally(() => setInitialized(true));
+  }, []);
 
   const login = useCallback(
     async (
@@ -80,26 +122,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       _remember: boolean
     ): Promise<{ success: boolean; error?: string }> => {
       setIsLoading(true);
-      // Simulate API delay
-      await new Promise((r) => setTimeout(r, 1000));
-
-      const userData = mockUsers.get(email.toLowerCase());
-      if (!userData || userData.password !== password) {
+      try {
+        const res = await authApi.login(email, password);
+        storeTokens(res);
+        const name = localStorage.getItem(USER_NAME_KEY) || email.split("@")[0];
+        localStorage.setItem(USER_NAME_KEY, name);
+        setUser(buildUser(res, name));
+        return { success: true };
+      } catch (err: unknown) {
+        return { success: false, error: err instanceof Error ? err.message : "Login failed" };
+      } finally {
         setIsLoading(false);
-        return { success: false, error: "Invalid email or password" };
       }
-
-      if (!userData.user.emailVerified) {
-        setIsLoading(false);
-        return {
-          success: false,
-          error: "Please verify your email before logging in",
-        };
-      }
-
-      setUser(userData.user);
-      setIsLoading(false);
-      return { success: true };
     },
     []
   );
@@ -111,83 +145,106 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       name: string
     ): Promise<{ success: boolean; error?: string }> => {
       setIsLoading(true);
-      await new Promise((r) => setTimeout(r, 1000));
-
-      if (mockUsers.has(email.toLowerCase())) {
+      try {
+        await authApi.signup({ name, email, password });
+        localStorage.setItem(PENDING_NAME_KEY, name);
+        return { success: true };
+      } catch (err: unknown) {
+        return { success: false, error: err instanceof Error ? err.message : "Signup failed" };
+      } finally {
         setIsLoading(false);
-        return { success: false, error: "An account with this email already exists" };
       }
-
-      const newUser: User = {
-        id: Math.random().toString(36).slice(2),
-        email: email.toLowerCase(),
-        name,
-        role: "user",
-        emailVerified: false,
-        createdAt: new Date(),
-        onboardingCompleted: false,
-      };
-
-      mockUsers.set(email.toLowerCase(), { user: newUser, password });
-      setIsLoading(false);
-      return { success: true };
     },
     []
   );
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    const rt = localStorage.getItem(REFRESH_TOKEN_KEY);
+    clearTokens();
     setUser(null);
+    if (rt) {
+      authApi.logout(rt).catch(() => undefined);
+    }
   }, []);
 
   const forgotPassword = useCallback(
-    async (_email: string): Promise<{ success: boolean; error?: string }> => {
+    async (email: string): Promise<{ success: boolean; error?: string }> => {
       setIsLoading(true);
-      await new Promise((r) => setTimeout(r, 1000));
-      setIsLoading(false);
-      // Always return success for security (don't reveal if email exists)
-      return { success: true };
+      try {
+        await authApi.forgotPassword(email);
+        return { success: true };
+      } catch (err: unknown) {
+        return { success: false, error: err instanceof Error ? err.message : "Request failed" };
+      } finally {
+        setIsLoading(false);
+      }
     },
     []
   );
 
   const resetPassword = useCallback(
-    async (
-      _token: string,
-      _password: string
-    ): Promise<{ success: boolean; error?: string }> => {
+    async (token: string, password: string): Promise<{ success: boolean; error?: string }> => {
       setIsLoading(true);
-      await new Promise((r) => setTimeout(r, 1000));
-      setIsLoading(false);
-      return { success: true };
+      try {
+        await authApi.resetPassword(token, password);
+        return { success: true };
+      } catch (err: unknown) {
+        return { success: false, error: err instanceof Error ? err.message : "Reset failed" };
+      } finally {
+        setIsLoading(false);
+      }
     },
     []
   );
 
   const resendVerification = useCallback(
-    async (_email: string): Promise<{ success: boolean; error?: string }> => {
+    async (email: string): Promise<{ success: boolean; error?: string }> => {
       setIsLoading(true);
-      await new Promise((r) => setTimeout(r, 1000));
-      setIsLoading(false);
-      return { success: true };
+      try {
+        await authApi.resendEmail(email);
+        return { success: true };
+      } catch (err: unknown) {
+        return { success: false, error: err instanceof Error ? err.message : "Failed to resend" };
+      } finally {
+        setIsLoading(false);
+      }
     },
     []
   );
 
   const verifyEmail = useCallback(
-    async (_token: string): Promise<{ success: boolean; error?: string }> => {
+    async (
+      token: string
+    ): Promise<{ success: boolean; error?: string; requiresTenantSetup?: boolean }> => {
       setIsLoading(true);
-      await new Promise((r) => setTimeout(r, 1000));
-      setIsLoading(false);
-      return { success: true };
+      try {
+        const res = await authApi.verifyEmail(token);
+        storeTokens(res);
+        const name =
+          localStorage.getItem(PENDING_NAME_KEY) || res.user.email.split("@")[0];
+        localStorage.setItem(USER_NAME_KEY, name);
+        localStorage.removeItem(PENDING_NAME_KEY);
+        setUser(buildUser(res, name));
+        return { success: true, requiresTenantSetup: res.requiresTenantSetup };
+      } catch (err: unknown) {
+        return { success: false, error: err instanceof Error ? err.message : "Verification failed" };
+      } finally {
+        setIsLoading(false);
+      }
     },
     []
   );
 
   const updateUser = useCallback((updates: Partial<User>) => {
-    setUser((prev) => (prev ? { ...prev, ...updates } : null));
+    setUser((prev) => {
+      if (!prev) return null;
+      if (updates.name) localStorage.setItem(USER_NAME_KEY, updates.name);
+      return { ...prev, ...updates };
+    });
   }, []);
 
   const completeOnboarding = useCallback(() => {
+    localStorage.setItem(ONBOARDING_KEY, "true");
     setUser((prev) => (prev ? { ...prev, onboardingCompleted: true } : null));
   }, []);
 
@@ -196,6 +253,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user,
         isLoading,
+        initialized,
         login,
         signup,
         logout,

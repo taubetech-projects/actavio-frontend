@@ -2,29 +2,39 @@
 
 import React from "react"
 
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Eye, EyeOff, Loader2, CheckCircle2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import AuthLayout from "@/components/auth/auth-layout";
 import { useAuth } from "@/lib/auth-context";
+import { authApi } from "@/lib/api";
 
 function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const token = searchParams.get("token") || "demo-token";
+  const token = searchParams.get("token") ?? "";
   const { resetPassword, isLoading } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [tokenValid, setTokenValid] = useState<boolean | null>(null);
   const [formData, setFormData] = useState({
     password: "",
     confirmPassword: "",
   });
+
+  useEffect(() => {
+    if (!token) {
+      setTokenValid(false);
+      return;
+    }
+    authApi.verifyResetToken(token).then((res) => setTokenValid(res.valid)).catch(() => setTokenValid(false));
+  }, [token]);
 
   const passwordRequirements = [
     { label: "At least 8 characters", met: formData.password.length >= 8 },
@@ -63,6 +73,34 @@ function ResetPasswordForm() {
       setError(result.error || "Failed to reset password");
     }
   };
+
+  if (tokenValid === null) {
+    return (
+      <AuthLayout title="Checking link..." subtitle="">
+        <div className="flex justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      </AuthLayout>
+    );
+  }
+
+  if (tokenValid === false) {
+    return (
+      <AuthLayout title="Link expired" subtitle="This password reset link is no longer valid">
+        <div className="space-y-6">
+          <div className="flex flex-col items-center justify-center rounded-lg border border-destructive/30 bg-destructive/10 p-8 text-center gap-4">
+            <XCircle className="h-12 w-12 text-destructive" />
+            <p className="text-sm text-muted-foreground">
+              The link may have expired or already been used. Request a new one.
+            </p>
+          </div>
+          <Button className="w-full" onClick={() => router.push("/forgot-password")}>
+            Request new reset link
+          </Button>
+        </div>
+      </AuthLayout>
+    );
+  }
 
   if (success) {
     return (

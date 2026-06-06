@@ -13,7 +13,7 @@ const _geistMono = Geist_Mono({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: 'TaskFlow AI - Your Intelligent Task Assistant',
   description: 'Speak your tasks. We take care of the rest — with full control. EU-hosted & GDPR-compliant.',
-  generator: 'v0.app',
+  generator: 'actavio.app',
   icons: {
     icon: [
       {

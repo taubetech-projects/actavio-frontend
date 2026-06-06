@@ -112,20 +112,21 @@ const mockUsers: AdminUser[] = [
 
 export default function AdminUsersPage() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, initialized } = useAuth();
   const [users, setUsers] = useState<AdminUser[]>(mockUsers);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "suspended" | "pending">("all");
 
   useEffect(() => {
+    if (!initialized) return;
     if (!user) {
       router.push("/login");
     } else if (user.role !== "admin") {
       router.push("/dashboard");
     }
-  }, [user, router]);
+  }, [user, initialized, router]);
 
-  if (!user || user.role !== "admin") {
+  if (!initialized || !user || user.role !== "admin") {
     return null;
   }
 

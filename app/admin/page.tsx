@@ -95,17 +95,18 @@ const systemHealth = [
 
 export default function AdminPage() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, initialized } = useAuth();
 
   useEffect(() => {
+    if (!initialized) return;
     if (!user) {
       router.push("/login");
     } else if (user.role !== "admin") {
       router.push("/dashboard");
     }
-  }, [user, router]);
+  }, [user, initialized, router]);
 
-  if (!user || user.role !== "admin") {
+  if (!initialized || !user || user.role !== "admin") {
     return null;
   }
 

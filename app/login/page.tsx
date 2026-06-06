@@ -138,16 +138,6 @@ export default function LoginPage() {
           </Link>
         </p>
 
-        {/* Demo credentials hint */}
-        <div className="rounded-lg border border-border bg-muted/50 p-4">
-          <p className="text-xs text-muted-foreground">
-            <strong>{t("auth.login.demoCredentials")}:</strong>
-            <br />
-            User: demo@taskflow.com / demo123
-            <br />
-            Admin: admin@taskflow.com / admin123
-          </p>
-        </div>
       </form>
     </AuthLayout>
   );

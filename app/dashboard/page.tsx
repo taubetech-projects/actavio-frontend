@@ -65,18 +65,19 @@ const stats = [
 ];
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, initialized } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
+    if (!initialized) return;
     if (!user) {
       router.push("/login");
     } else if (!user.onboardingCompleted) {
       router.push("/onboarding");
     }
-  }, [user, router]);
+  }, [user, initialized, router]);
 
-  if (!user || !user.onboardingCompleted) {
+  if (!initialized || !user || !user.onboardingCompleted) {
     return null;
   }
 
