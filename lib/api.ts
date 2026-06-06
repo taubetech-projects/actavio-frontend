@@ -143,3 +143,50 @@ export const authApi = {
       `/api/auth/reset-password/verify?token=${encodeURIComponent(token)}`
     ),
 };
+
+// ── Task types ───────────────────────────────────────────────────────────────
+
+export type TaskStatus = "OPEN" | "DONE";
+
+export interface Task {
+  id: string;
+  title: string;
+  notes: string | null;
+  dueAt: string | null;
+  status: TaskStatus;
+}
+
+export interface CreateTaskInput {
+  title: string;
+  notes?: string;
+  dueAt?: string;
+}
+
+export interface UpdateTaskInput {
+  title?: string;
+  notes?: string | null;
+  dueAt?: string | null;
+  status?: TaskStatus;
+}
+
+// ── Task endpoints ───────────────────────────────────────────────────────────
+
+export const tasksApi = {
+  list: () =>
+    apiFetch<Task[]>("/api/v1/tasks"),
+
+  get: (id: string) =>
+    apiFetch<Task>(`/api/v1/tasks/${id}`),
+
+  create: (body: CreateTaskInput) =>
+    apiFetch<Task>("/api/v1/tasks", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  update: (id: string, body: UpdateTaskInput) =>
+    apiFetch<Task>(`/api/v1/tasks/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+};

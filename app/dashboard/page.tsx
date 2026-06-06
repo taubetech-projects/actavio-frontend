@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
@@ -9,64 +9,20 @@ import {
   ArrowRight,
   Plus,
   TrendingUp,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import DashboardLayout from "@/components/dashboard/dashboard-layout";
 import { useAuth } from "@/lib/auth-context";
-
-const recentTasks = [
-  {
-    id: 1,
-    title: "Follow up Müller GmbH",
-    dueDate: "Today, 2:00 PM",
-    status: "pending",
-  },
-  {
-    id: 2,
-    title: "Review quarterly report",
-    dueDate: "Tomorrow, 10:00 AM",
-    status: "pending",
-  },
-  {
-    id: 3,
-    title: "Call with marketing team",
-    dueDate: "Jan 25, 3:00 PM",
-    status: "completed",
-  },
-  {
-    id: 4,
-    title: "Send proposal to Schmidt AG",
-    dueDate: "Jan 23, 11:00 AM",
-    status: "completed",
-  },
-];
-
-const stats = [
-  {
-    title: "Tasks Completed",
-    value: "12",
-    change: "+3 this week",
-    icon: CheckCircle2,
-  },
-  { title: "Pending Tasks", value: "5", change: "2 due today", icon: Clock },
-  {
-    title: "Upcoming Events",
-    value: "8",
-    change: "Next 7 days",
-    icon: Calendar,
-  },
-  {
-    title: "Productivity Score",
-    value: "87%",
-    change: "+5% vs last week",
-    icon: TrendingUp,
-  },
-];
+import { tasksApi, type Task } from "@/lib/api";
+import Link from "next/link";
 
 export default function DashboardPage() {
   const { user, initialized } = useAuth();
   const router = useRouter();
+  const [recentTasks, setRecentTasks] = useState<Task[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
 
   useEffect(() => {
     if (!initialized) return;
@@ -77,9 +33,48 @@ export default function DashboardPage() {
     }
   }, [user, initialized, router]);
 
+  useEffect(() => {
+    if (!initialized || !user?.onboardingCompleted) return;
+    tasksApi
+      .list()
+      .then((data) => setRecentTasks(data.slice(0, 4)))
+      .catch(() => undefined)
+      .finally(() => setTasksLoading(false));
+  }, [initialized, user]);
+
   if (!initialized || !user || !user.onboardingCompleted) {
     return null;
   }
+
+  const openCount = recentTasks.filter((t) => t.status === "OPEN").length;
+  const doneCount = recentTasks.filter((t) => t.status === "DONE").length;
+
+  const stats = [
+    {
+      title: "Tasks Done",
+      value: String(doneCount),
+      change: "from recent tasks",
+      icon: CheckCircle2,
+    },
+    {
+      title: "Open Tasks",
+      value: String(openCount),
+      change: "need attention",
+      icon: Clock,
+    },
+    {
+      title: "Upcoming Events",
+      value: "—",
+      change: "Next 7 days",
+      icon: Calendar,
+    },
+    {
+      title: "Productivity Score",
+      value: "—",
+      change: "coming soon",
+      icon: TrendingUp,
+    },
+  ];
 
   return (
     <DashboardLayout>
@@ -94,9 +89,11 @@ export default function DashboardPage() {
               {"Here's what's happening with your tasks today."}
             </p>
           </div>
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />
-            New Task
+          <Button asChild>
+            <Link href="/dashboard/tasks">
+              <Plus className="mr-2 h-4 w-4" />
+              New Task
+            </Link>
           </Button>
         </div>
 
@@ -108,12 +105,8 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-muted-foreground">{stat.title}</p>
-                    <p className="mt-1 text-2xl font-bold text-foreground">
-                      {stat.value}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {stat.change}
-                    </p>
+                    <p className="mt-1 text-2xl font-bold text-foreground">{stat.value}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{stat.change}</p>
                   </div>
                   <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
                     <stat.icon className="h-6 w-6 text-foreground" />
@@ -128,53 +121,73 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>Recent Tasks</CardTitle>
-            <Button variant="ghost" size="sm">
-              View all
-              <ArrowRight className="ml-2 h-4 w-4" />
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/dashboard/tasks">
+                View all
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
             </Button>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {recentTasks.map((task) => (
-                <div
-                  key={task.id}
-                  className="flex items-center justify-between rounded-lg border border-border p-4 transition-colors hover:bg-secondary/50"
-                >
-                  <div className="flex items-center gap-4">
-                    <div
-                      className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                        task.status === "completed"
-                          ? "bg-success/10"
-                          : "bg-secondary"
-                      }`}
-                    >
-                      {task.status === "completed" ? (
-                        <CheckCircle2 className="h-5 w-5 text-success" />
-                      ) : (
-                        <Clock className="h-5 w-5 text-muted-foreground" />
-                      )}
-                    </div>
-                    <div>
-                      <p
-                        className={`font-medium ${
-                          task.status === "completed"
-                            ? "text-muted-foreground line-through"
-                            : "text-foreground"
+            {tasksLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : recentTasks.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                No tasks yet.{" "}
+                <Link href="/dashboard/tasks" className="font-medium text-foreground hover:underline">
+                  Create your first task.
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {recentTasks.map((task) => (
+                  <div
+                    key={task.id}
+                    className="flex items-center justify-between rounded-lg border border-border p-4 transition-colors hover:bg-secondary/50"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div
+                        className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                          task.status === "DONE" ? "bg-success/10" : "bg-secondary"
                         }`}
                       >
-                        {task.title}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        {task.dueDate}
-                      </p>
+                        {task.status === "DONE" ? (
+                          <CheckCircle2 className="h-5 w-5 text-success" />
+                        ) : (
+                          <Clock className="h-5 w-5 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div>
+                        <p
+                          className={`font-medium ${
+                            task.status === "DONE"
+                              ? "text-muted-foreground line-through"
+                              : "text-foreground"
+                          }`}
+                        >
+                          {task.title}
+                        </p>
+                        {task.dueAt && (
+                          <p className="text-sm text-muted-foreground">
+                            {new Date(task.dueAt).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </p>
+                        )}
+                      </div>
                     </div>
+                    <Button variant="ghost" size="sm" asChild>
+                      <Link href="/dashboard/tasks">View</Link>
+                    </Button>
                   </div>
-                  <Button variant="ghost" size="sm">
-                    View
-                  </Button>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
