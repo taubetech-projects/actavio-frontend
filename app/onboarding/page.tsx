@@ -9,6 +9,7 @@ import InputScreen from "@/components/onboarding/input-screen";
 import PreviewScreen from "@/components/onboarding/preview-screen";
 import SuccessScreen from "@/components/onboarding/success-screen";
 import { useAuth } from "@/lib/auth-context";
+import { tenantsApi } from "@/lib/api";
 
 export type OnboardingStep =
   | "welcome"
@@ -28,10 +29,13 @@ export interface TaskData {
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const { user, initialized, completeOnboarding } = useAuth();
+  const { user, initialized, loginWithTokens } = useAuth();
   const [currentStep, setCurrentStep] = useState<OnboardingStep>("welcome");
+  const [orgName, setOrgName] = useState("");
   const [connectedTool, setConnectedTool] = useState<string | null>(null);
   const [selectedUseCase, setSelectedUseCase] = useState<string>("follow-ups");
+  const [isCompletingOnboarding, setIsCompletingOnboarding] = useState(false);
+  const [completionError, setCompletionError] = useState("");
   const [taskData, setTaskData] = useState<TaskData>({
     rawInput: "",
     taskTitle: "Follow up Müller GmbH",
@@ -55,9 +59,18 @@ export default function OnboardingPage() {
 
   const goToStep = (step: OnboardingStep) => setCurrentStep(step);
 
-  const handleOnboardingComplete = () => {
-    completeOnboarding();
-    router.push("/dashboard");
+  const handleOnboardingComplete = async () => {
+    setCompletionError("");
+    setIsCompletingOnboarding(true);
+    try {
+      const result = await tenantsApi.create(orgName || `${user!.name}'s Workspace`);
+      loginWithTokens(result.session);
+      // onboardingCompleted becomes true via requiresTenantSetup: false in the new session;
+      // the useEffect guard above will redirect to /dashboard once user state updates.
+    } catch (err: unknown) {
+      setCompletionError(err instanceof Error ? err.message : "Failed to create workspace. Please try again.");
+      setIsCompletingOnboarding(false);
+    }
   };
 
   const userName = user.name?.split(" ")[0] || "there";
@@ -65,7 +78,10 @@ export default function OnboardingPage() {
   return (
     <main className="min-h-screen bg-background">
       {currentStep === "welcome" && (
-        <WelcomeScreen userName={userName} onContinue={() => goToStep("connect")} />
+        <WelcomeScreen
+          userName={userName}
+          onContinue={(name) => { setOrgName(name); goToStep("connect"); }}
+        />
       )}
       {currentStep === "connect" && (
         <ConnectToolScreen
@@ -103,6 +119,8 @@ export default function OnboardingPage() {
           taskData={taskData}
           onDoAnother={() => goToStep("input")}
           onViewTask={handleOnboardingComplete}
+          isLoading={isCompletingOnboarding}
+          error={completionError}
         />
       )}
     </main>

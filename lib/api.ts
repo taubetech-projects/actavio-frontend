@@ -144,6 +144,30 @@ export const authApi = {
     ),
 };
 
+// ── Tenant types ─────────────────────────────────────────────────────────────
+
+export interface TenantDetail {
+  id: string;
+  name: string;
+  role: TenantRole;
+  createdAt: string;
+}
+
+export interface CreateTenantResponse {
+  tenant: TenantDetail;
+  session: AuthTokenResponse;
+}
+
+// ── Tenant endpoints ──────────────────────────────────────────────────────────
+
+export const tenantsApi = {
+  create: (name: string) =>
+    apiFetch<CreateTenantResponse>("/api/v1/tenants", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+};
+
 // ── Invite types ─────────────────────────────────────────────────────────────
 
 export interface InviteResponse {

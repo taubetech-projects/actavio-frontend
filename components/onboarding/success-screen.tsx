@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Check, FileText, Bell, Calendar } from "lucide-react";
+import { Check, FileText, Bell, Calendar, Loader2 } from "lucide-react";
 import Logo from "@/components/logo";
 import type { TaskData } from "@/app/onboarding/page";
 
@@ -9,12 +9,16 @@ interface SuccessScreenProps {
   taskData: TaskData;
   onDoAnother: () => void;
   onViewTask: () => void;
+  isLoading?: boolean;
+  error?: string;
 }
 
 export default function SuccessScreen({
   taskData,
   onDoAnother,
   onViewTask,
+  isLoading = false,
+  error,
 }: SuccessScreenProps) {
   const completedItems = [
     { icon: FileText, text: "Task created" },
@@ -70,15 +74,26 @@ export default function SuccessScreen({
 
         {/* Action Buttons */}
         <div className="space-y-3">
+          {error && (
+            <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive text-center">
+              {error}
+            </div>
+          )}
           <Button
             onClick={onViewTask}
+            disabled={isLoading}
             size="lg"
             className="w-full h-12 text-base font-medium"
           >
-            Go to Dashboard
+            {isLoading ? (
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Setting up workspace…</>
+            ) : (
+              "Go to Dashboard"
+            )}
           </Button>
           <Button
             onClick={onDoAnother}
+            disabled={isLoading}
             variant="outline"
             size="lg"
             className="w-full h-12 text-base font-medium bg-transparent"
