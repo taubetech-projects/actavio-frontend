@@ -171,6 +171,89 @@ export interface UpdateTaskInput {
 
 // ── Task endpoints ───────────────────────────────────────────────────────────
 
+// ── Action plan types ────────────────────────────────────────────────────────
+
+export type ActionPlanStatus =
+  | "DRAFT"
+  | "CONFIRMED"
+  | "EXECUTING"
+  | "SUCCESS"
+  | "FAILED"
+  | "CANCELLED";
+
+export type ActionType =
+  | "CREATE_TASK"
+  | "UPDATE_TASK"
+  | "CREATE_CALENDAR_EVENT"
+  | "RESCHEDULE_CALENDAR_EVENT"
+  | "DRAFT_EMAIL"
+  | "SEND_EMAIL"
+  | "TRIGGER_WORKFLOW"
+  | "LOG_CRM_ACTIVITY"
+  | "UPDATE_DEAL_STATUS";
+
+export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
+export type ExecutionEngineType = "N8N" | "DIRECT" | "HYBRID";
+
+export interface ActionExplain {
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  triggers: Array<{ phrase: string; maps_to: string }>;
+  defaults: Array<{ field: string; value: string }>;
+  willNot: string[];
+}
+
+export interface PlanAction {
+  index: number;
+  type: ActionType;
+  provider: IntegrationProvider;
+  riskLevel: RiskLevel;
+  payload: Record<string, unknown>;
+}
+
+export interface ActionPlanDetail {
+  actionPlanId: string;
+  status: ActionPlanStatus;
+  riskLevel: RiskLevel;
+  explain: ActionExplain;
+  actions: PlanAction[];
+}
+
+export interface ActionPlanSummary {
+  id: string;
+  inputText: string;
+  status: ActionPlanStatus;
+  riskLevel: RiskLevel;
+  createdAt: string;
+  confirmedAt: string | null;
+}
+
+export interface ConfirmResponse {
+  status: ActionPlanStatus;
+  requestId: string;
+  engineType: ExecutionEngineType;
+}
+
+// ── Action plan endpoints ─────────────────────────────────────────────────────
+
+export const actionPlansApi = {
+  preview: (text: string, idempotencyKey?: string) =>
+    apiFetch<ActionPlanDetail>("/api/v1/instructions/preview", {
+      method: "POST",
+      body: JSON.stringify({ text, ...(idempotencyKey ? { idempotencyKey } : {}) }),
+    }),
+
+  confirm: (id: string) =>
+    apiFetch<ConfirmResponse>(`/api/v1/action-plans/${id}/confirm`, {
+      method: "POST",
+    }),
+
+  list: () =>
+    apiFetch<ActionPlanSummary[]>("/api/v1/action-plans"),
+
+  get: (id: string) =>
+    apiFetch<ActionPlanDetail>(`/api/v1/action-plans/${id}`),
+};
+
 // ── Integration types ────────────────────────────────────────────────────────
 
 export type IntegrationProvider =

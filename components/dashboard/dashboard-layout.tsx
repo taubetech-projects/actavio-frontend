@@ -15,6 +15,7 @@ import {
   X,
   ChevronDown,
   Shield,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +30,7 @@ import { useAuth } from "@/lib/auth-context";
 
 const userNavItems = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { name: "AI Assistant", href: "/dashboard/action-plans", icon: Sparkles },
   { name: "My Tasks", href: "/dashboard/tasks", icon: ListTodo },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
