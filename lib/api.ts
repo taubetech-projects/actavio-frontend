@@ -297,6 +297,33 @@ export const integrationsApi = {
     }),
 };
 
+// ── Settings types ───────────────────────────────────────────────────────────
+
+export interface EngineSettings {
+  tenantDefaultEngine: ExecutionEngineType | null;
+  userEngineOverride: ExecutionEngineType | null;
+  effectiveEngine: ExecutionEngineType;
+}
+
+// ── Settings endpoints ───────────────────────────────────────────────────────
+
+export const settingsApi = {
+  get: () =>
+    apiFetch<EngineSettings>("/api/v1/settings"),
+
+  setTenantDefault: (defaultEngineType: ExecutionEngineType) =>
+    apiFetch<EngineSettings>("/api/v1/settings/tenant-default-engine", {
+      method: "PATCH",
+      body: JSON.stringify({ defaultEngineType }),
+    }),
+
+  setUserOverride: (engineOverride: ExecutionEngineType | null) =>
+    apiFetch<EngineSettings>("/api/v1/settings/my-engine-override", {
+      method: "PATCH",
+      body: JSON.stringify({ engineOverride }),
+    }),
+};
+
 // ── Task types ───────────────────────────────────────────────────────────────
 
 export const tasksApi = {

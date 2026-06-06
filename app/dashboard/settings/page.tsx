@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   WifiOff,
   Unplug,
+  Cpu,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,8 +45,11 @@ import DashboardLayout from "@/components/dashboard/dashboard-layout";
 import { useAuth } from "@/lib/auth-context";
 import {
   integrationsApi,
+  settingsApi,
   type Integration,
   type IntegrationProvider,
+  type ExecutionEngineType,
+  type EngineSettings,
 } from "@/lib/api";
 
 // ── Provider metadata ────────────────────────────────────────────────────────
@@ -125,6 +129,66 @@ function StatusBadge({ status }: { status: Integration["status"] }) {
   );
 }
 
+// ── Engine metadata ──────────────────────────────────────────────────────────
+
+const ENGINE_META: Record<ExecutionEngineType, { label: string; description: string }> = {
+  N8N:    { label: "n8n",    description: "Automation platform — best for complex, multi-step workflows" },
+  DIRECT: { label: "Direct", description: "Built-in execution — simple actions without external dependencies" },
+  HYBRID: { label: "Hybrid", description: "Automatic — picks the best engine per action type" },
+};
+
+const ENGINE_OPTIONS: ExecutionEngineType[] = ["N8N", "DIRECT", "HYBRID"];
+
+function EngineSelector({
+  value,
+  onChange,
+  includeNone,
+  disabled,
+}: {
+  value: ExecutionEngineType | null;
+  onChange: (v: ExecutionEngineType | null) => void;
+  includeNone?: boolean;
+  disabled?: boolean;
+}) {
+  const options: Array<{ key: ExecutionEngineType | null; label: string; description: string }> = [
+    ...(includeNone
+      ? [{ key: null as null, label: "Use org default", description: "Follow whatever the organization has configured" }]
+      : []),
+    ...ENGINE_OPTIONS.map((e) => ({ key: e as ExecutionEngineType, ...ENGINE_META[e] })),
+  ];
+
+  return (
+    <div className="space-y-2">
+      {options.map((opt) => {
+        const selected = value === opt.key;
+        return (
+          <button
+            key={String(opt.key)}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(opt.key)}
+            className={`w-full flex items-start gap-3 rounded-lg border p-3 text-left transition-colors ${
+              selected
+                ? "border-foreground bg-secondary"
+                : "border-border hover:bg-muted/50"
+            } ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+          >
+            <div className={`mt-0.5 h-4 w-4 rounded-full border-2 shrink-0 flex items-center justify-center ${
+              selected ? "border-foreground" : "border-muted-foreground"
+            }`}>
+              {selected && <div className="h-2 w-2 rounded-full bg-foreground" />}
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">{opt.label}</p>
+              <p className="text-xs text-muted-foreground">{opt.description}</p>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -141,6 +205,16 @@ export default function SettingsPage() {
     weeklyDigest: false,
     marketingEmails: false,
   });
+
+  // Engine settings state
+  const [engineSettings, setEngineSettings] = useState<EngineSettings | null>(null);
+  const [engineLoading, setEngineLoading] = useState(false);
+  const [engineError, setEngineError] = useState<string | null>(null);
+  const [userOverride, setUserOverride] = useState<ExecutionEngineType | null>(null);
+  const [tenantDefault, setTenantDefault] = useState<ExecutionEngineType | null>(null);
+  const [savingUserOverride, setSavingUserOverride] = useState(false);
+  const [savingTenantDefault, setSavingTenantDefault] = useState(false);
+  const [engineSaved, setEngineSaved] = useState<"user" | "tenant" | null>(null);
 
   // Integrations state
   const [integrations, setIntegrations] = useState<
@@ -183,6 +257,46 @@ export default function SettingsPage() {
       setIntegrationsLoading(false);
     }
   }, []);
+
+  const loadEngineSettings = useCallback(async () => {
+    setEngineLoading(true);
+    setEngineError(null);
+    try {
+      const data = await settingsApi.get();
+      setEngineSettings(data);
+      setUserOverride(data.userEngineOverride);
+      setTenantDefault(data.tenantDefaultEngine);
+    } catch {
+      setEngineError("Failed to load engine settings.");
+    } finally {
+      setEngineLoading(false);
+    }
+  }, []);
+
+  async function handleSaveUserOverride() {
+    setSavingUserOverride(true);
+    try {
+      const data = await settingsApi.setUserOverride(userOverride);
+      setEngineSettings(data);
+      setEngineSaved("user");
+      setTimeout(() => setEngineSaved(null), 2000);
+    } finally {
+      setSavingUserOverride(false);
+    }
+  }
+
+  async function handleSaveTenantDefault() {
+    if (!tenantDefault) return;
+    setSavingTenantDefault(true);
+    try {
+      const data = await settingsApi.setTenantDefault(tenantDefault);
+      setEngineSettings(data);
+      setEngineSaved("tenant");
+      setTimeout(() => setEngineSaved(null), 2000);
+    } finally {
+      setSavingTenantDefault(false);
+    }
+  }
 
   const handleSaveProfile = async () => {
     setSaving(true);
@@ -253,6 +367,10 @@ export default function SettingsPage() {
             <TabsTrigger value="profile" className="flex items-center gap-2">
               <User className="h-4 w-4" />
               Profile
+            </TabsTrigger>
+            <TabsTrigger value="engine" className="flex items-center gap-2" onClick={loadEngineSettings}>
+              <Cpu className="h-4 w-4" />
+              Engine
             </TabsTrigger>
             <TabsTrigger value="integrations" className="flex items-center gap-2" onClick={loadIntegrations}>
               <Plug className="h-4 w-4" />
@@ -339,6 +457,115 @@ export default function SettingsPage() {
                 </Button>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* Engine Tab */}
+          <TabsContent value="engine">
+            {engineLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : engineError ? (
+              <div className="flex flex-col items-center gap-3 py-16 text-center">
+                <AlertCircle className="h-8 w-8 text-destructive" />
+                <p className="text-sm text-muted-foreground">{engineError}</p>
+                <Button variant="outline" size="sm" onClick={loadEngineSettings}>Retry</Button>
+              </div>
+            ) : !engineSettings ? (
+              <Card>
+                <CardContent className="pt-6 text-center text-sm text-muted-foreground py-12">
+                  Click the Engine tab to load settings.
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-6">
+                {/* Effective engine */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Effective Engine</CardTitle>
+                    <CardDescription>
+                      The execution engine that will run your action plans right now.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex items-center gap-2 rounded-lg bg-secondary px-3 py-1.5 text-sm font-semibold text-foreground">
+                        <Cpu className="h-4 w-4" />
+                        {ENGINE_META[engineSettings.effectiveEngine].label}
+                      </span>
+                      <p className="text-sm text-muted-foreground">
+                        {engineSettings.userEngineOverride
+                          ? "Your personal override is active."
+                          : engineSettings.tenantDefaultEngine
+                            ? "Using your organization's default."
+                            : "No engine configured — using system default."}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* User override */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Your Preference</CardTitle>
+                    <CardDescription>
+                      Override the organization default for your own account. Select &ldquo;Use org default&rdquo; to clear your override.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <EngineSelector
+                      value={userOverride}
+                      onChange={setUserOverride}
+                      includeNone
+                      disabled={savingUserOverride}
+                    />
+                    <Button
+                      onClick={handleSaveUserOverride}
+                      disabled={savingUserOverride}
+                    >
+                      {savingUserOverride ? (
+                        <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</>
+                      ) : engineSaved === "user" ? (
+                        <><Check className="mr-2 h-4 w-4" />Saved</>
+                      ) : (
+                        "Save preference"
+                      )}
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                {/* Tenant default — admin only */}
+                {user.role === "admin" && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Organization Default</CardTitle>
+                      <CardDescription>
+                        Default engine for all members of this organization. Requires Admin role.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <EngineSelector
+                        value={tenantDefault}
+                        onChange={(v) => setTenantDefault(v as ExecutionEngineType)}
+                        disabled={savingTenantDefault}
+                      />
+                      <Button
+                        onClick={handleSaveTenantDefault}
+                        disabled={savingTenantDefault || !tenantDefault}
+                      >
+                        {savingTenantDefault ? (
+                          <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</>
+                        ) : engineSaved === "tenant" ? (
+                          <><Check className="mr-2 h-4 w-4" />Saved</>
+                        ) : (
+                          "Save org default"
+                        )}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
           </TabsContent>
 
           {/* Integrations Tab */}
