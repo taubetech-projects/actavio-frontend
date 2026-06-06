@@ -1,27 +1,139 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Check, User, Bell, Shield, Palette } from "lucide-react";
+import {
+  Loader2,
+  Check,
+  User,
+  Bell,
+  Shield,
+  Palette,
+  Plug,
+  Mail,
+  Calendar,
+  MessageSquare,
+  BarChart2,
+  BookOpen,
+  ListTodo,
+  AlertCircle,
+  CheckCircle2,
+  WifiOff,
+  Unplug,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import DashboardLayout from "@/components/dashboard/dashboard-layout";
 import { useAuth } from "@/lib/auth-context";
+import {
+  integrationsApi,
+  type Integration,
+  type IntegrationProvider,
+} from "@/lib/api";
+
+// ── Provider metadata ────────────────────────────────────────────────────────
+
+const PROVIDER_META: Record<
+  IntegrationProvider,
+  { name: string; icon: React.ElementType; description: string }
+> = {
+  GMAIL: {
+    name: "Gmail",
+    icon: Mail,
+    description: "Send and draft emails on your behalf",
+  },
+  GOOGLE_CALENDAR: {
+    name: "Google Calendar",
+    icon: Calendar,
+    description: "Create and reschedule calendar events",
+  },
+  OUTLOOK_MAIL: {
+    name: "Outlook Mail",
+    icon: Mail,
+    description: "Send and draft emails via Outlook",
+  },
+  OUTLOOK_CALENDAR: {
+    name: "Outlook Calendar",
+    icon: Calendar,
+    description: "Create and reschedule Outlook calendar events",
+  },
+  SLACK: {
+    name: "Slack",
+    icon: MessageSquare,
+    description: "Send messages and trigger workflows",
+  },
+  HUBSPOT: {
+    name: "HubSpot",
+    icon: BarChart2,
+    description: "Log CRM activities and update deal status",
+  },
+  NOTION: {
+    name: "Notion",
+    icon: BookOpen,
+    description: "Create and update Notion pages",
+  },
+  INTERNAL_TASKS: {
+    name: "Internal Tasks",
+    icon: ListTodo,
+    description: "Manage tasks directly within Actavio",
+  },
+};
+
+const ALL_PROVIDERS = Object.keys(PROVIDER_META) as IntegrationProvider[];
+
+// ── Status badge ─────────────────────────────────────────────────────────────
+
+function StatusBadge({ status }: { status: Integration["status"] }) {
+  if (status === "CONNECTED") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+        <CheckCircle2 className="h-3 w-3" />
+        Connected
+      </span>
+    );
+  }
+  if (status === "ERROR") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+        <AlertCircle className="h-3 w-3" />
+        Error
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+      <WifiOff className="h-3 w-3" />
+      Disconnected
+    </span>
+  );
+}
+
+// ── Main page ────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { user, updateUser } = useAuth();
+  const { user, initialized, updateUser } = useAuth();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const [profile, setProfile] = useState({
-    name: "",
-    email: "",
-  });
+  const [profile, setProfile] = useState({ name: "", email: "" });
 
   const [notifications, setNotifications] = useState({
     emailReminders: true,
@@ -30,29 +142,105 @@ export default function SettingsPage() {
     marketingEmails: false,
   });
 
+  // Integrations state
+  const [integrations, setIntegrations] = useState<
+    Partial<Record<IntegrationProvider, Integration>>
+  >({});
+  const [integrationsLoading, setIntegrationsLoading] = useState(false);
+  const [integrationsError, setIntegrationsError] = useState<string | null>(null);
+  const [connectingProvider, setConnectingProvider] =
+    useState<IntegrationProvider | null>(null);
+  const [disconnectingProvider, setDisconnectingProvider] =
+    useState<IntegrationProvider | null>(null);
+  const [connectDialog, setConnectDialog] = useState<{
+    open: boolean;
+    provider: IntegrationProvider | null;
+    displayName: string;
+  }>({ open: false, provider: null, displayName: "" });
+
   useEffect(() => {
+    if (!initialized) return;
     if (!user) {
       router.push("/login");
     } else {
       setProfile({ name: user.name, email: user.email });
     }
-  }, [user, router]);
+  }, [user, initialized, router]);
+
+  const loadIntegrations = useCallback(async () => {
+    setIntegrationsLoading(true);
+    setIntegrationsError(null);
+    try {
+      const data = await integrationsApi.list();
+      const map: Partial<Record<IntegrationProvider, Integration>> = {};
+      for (const integration of data) {
+        map[integration.provider] = integration;
+      }
+      setIntegrations(map);
+    } catch {
+      setIntegrationsError("Failed to load integrations.");
+    } finally {
+      setIntegrationsLoading(false);
+    }
+  }, []);
 
   const handleSaveProfile = async () => {
     setSaving(true);
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 500));
     updateUser({ name: profile.name });
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
-  if (!user) return null;
+  function openConnectDialog(provider: IntegrationProvider) {
+    const existing = integrations[provider];
+    setConnectDialog({
+      open: true,
+      provider,
+      displayName: existing?.displayName ?? "",
+    });
+  }
+
+  async function handleConnect() {
+    const { provider, displayName } = connectDialog;
+    if (!provider) return;
+    setConnectingProvider(provider);
+    setConnectDialog((d) => ({ ...d, open: false }));
+    try {
+      const result = await integrationsApi.connect(provider, {
+        displayName: displayName.trim() || undefined,
+      });
+      setIntegrations((prev) => ({ ...prev, [provider]: result }));
+    } catch {
+      // Refresh the list to reflect any partial state
+      loadIntegrations();
+    } finally {
+      setConnectingProvider(null);
+    }
+  }
+
+  async function handleDisconnect(provider: IntegrationProvider) {
+    setDisconnectingProvider(provider);
+    try {
+      await integrationsApi.disconnect(provider);
+      setIntegrations((prev) => {
+        const next = { ...prev };
+        delete next[provider];
+        return next;
+      });
+    } catch {
+      loadIntegrations();
+    } finally {
+      setDisconnectingProvider(null);
+    }
+  }
+
+  if (!initialized || !user) return null;
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header */}
         <div>
           <h1 className="text-2xl font-bold text-foreground">Settings</h1>
           <p className="text-muted-foreground">
@@ -60,17 +248,17 @@ export default function SettingsPage() {
           </p>
         </div>
 
-        {/* Tabs */}
         <Tabs defaultValue="profile" className="space-y-6">
           <TabsList>
             <TabsTrigger value="profile" className="flex items-center gap-2">
               <User className="h-4 w-4" />
               Profile
             </TabsTrigger>
-            <TabsTrigger
-              value="notifications"
-              className="flex items-center gap-2"
-            >
+            <TabsTrigger value="integrations" className="flex items-center gap-2" onClick={loadIntegrations}>
+              <Plug className="h-4 w-4" />
+              Integrations
+            </TabsTrigger>
+            <TabsTrigger value="notifications" className="flex items-center gap-2">
               <Bell className="h-4 w-4" />
               Notifications
             </TabsTrigger>
@@ -134,23 +322,130 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4">
-                  <Button onClick={handleSaveProfile} disabled={saving}>
-                    {saving ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Saving...
-                      </>
-                    ) : saved ? (
-                      <>
-                        <Check className="mr-2 h-4 w-4" />
-                        Saved
-                      </>
-                    ) : (
-                      "Save changes"
-                    )}
-                  </Button>
-                </div>
+                <Button onClick={handleSaveProfile} disabled={saving}>
+                  {saving ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : saved ? (
+                    <>
+                      <Check className="mr-2 h-4 w-4" />
+                      Saved
+                    </>
+                  ) : (
+                    "Save changes"
+                  )}
+                </Button>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Integrations Tab */}
+          <TabsContent value="integrations">
+            <Card>
+              <CardHeader>
+                <CardTitle>Connected Integrations</CardTitle>
+                <CardDescription>
+                  Connect external services so Actavio can act on your behalf.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {integrationsLoading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : integrationsError ? (
+                  <div className="flex flex-col items-center gap-3 py-12 text-center">
+                    <AlertCircle className="h-8 w-8 text-destructive" />
+                    <p className="text-sm text-muted-foreground">{integrationsError}</p>
+                    <Button variant="outline" size="sm" onClick={loadIntegrations}>
+                      Retry
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {ALL_PROVIDERS.map((provider) => {
+                      const meta = PROVIDER_META[provider];
+                      const Icon = meta.icon;
+                      const integration = integrations[provider];
+                      const status = integration?.status ?? "DISCONNECTED";
+                      const isConnected = status === "CONNECTED";
+                      const isConnecting = connectingProvider === provider;
+                      const isDisconnecting = disconnectingProvider === provider;
+                      const isBusy = isConnecting || isDisconnecting;
+
+                      return (
+                        <div
+                          key={provider}
+                          className="flex flex-col gap-3 rounded-lg border border-border p-4"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                                <Icon className="h-5 w-5 text-foreground" />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-medium text-foreground leading-tight">
+                                  {meta.name}
+                                </p>
+                                {integration?.displayName && (
+                                  <p className="text-xs text-muted-foreground truncate">
+                                    {integration.displayName}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <StatusBadge status={status} />
+                          </div>
+
+                          <p className="text-xs text-muted-foreground">
+                            {meta.description}
+                          </p>
+
+                          {status === "ERROR" && integration?.lastError && (
+                            <p className="text-xs text-destructive">
+                              {integration.lastError}
+                            </p>
+                          )}
+
+                          <div className="flex gap-2">
+                            {isConnected ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-destructive hover:bg-destructive/10 hover:text-destructive bg-transparent"
+                                disabled={isBusy}
+                                onClick={() => handleDisconnect(provider)}
+                              >
+                                {isDisconnecting ? (
+                                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Unplug className="mr-1.5 h-3 w-3" />
+                                )}
+                                Disconnect
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={isBusy}
+                                onClick={() => openConnectDialog(provider)}
+                              >
+                                {isConnecting ? (
+                                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Plug className="mr-1.5 h-3 w-3" />
+                                )}
+                                {status === "ERROR" ? "Reconnect" : "Connect"}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -161,92 +456,48 @@ export default function SettingsPage() {
               <CardHeader>
                 <CardTitle>Notification Preferences</CardTitle>
                 <CardDescription>
-                  Choose how you want to be notified about updates and
-                  reminders.
+                  Choose how you want to be notified about updates and reminders.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between rounded-lg border border-border p-4">
+              <CardContent className="space-y-4">
+                {[
+                  {
+                    key: "emailReminders" as const,
+                    label: "Email reminders",
+                    description: "Receive email notifications for upcoming tasks",
+                  },
+                  {
+                    key: "pushNotifications" as const,
+                    label: "Push notifications",
+                    description: "Receive browser notifications for important updates",
+                  },
+                  {
+                    key: "weeklyDigest" as const,
+                    label: "Weekly digest",
+                    description: "Get a weekly summary of your completed tasks",
+                  },
+                  {
+                    key: "marketingEmails" as const,
+                    label: "Marketing emails",
+                    description: "Receive updates about new features and promotions",
+                  },
+                ].map(({ key, label, description }) => (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between rounded-lg border border-border p-4"
+                  >
                     <div>
-                      <p className="font-medium text-foreground">
-                        Email reminders
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        Receive email notifications for upcoming tasks
-                      </p>
+                      <p className="font-medium text-foreground">{label}</p>
+                      <p className="text-sm text-muted-foreground">{description}</p>
                     </div>
                     <Switch
-                      checked={notifications.emailReminders}
+                      checked={notifications[key]}
                       onCheckedChange={(checked) =>
-                        setNotifications({
-                          ...notifications,
-                          emailReminders: checked,
-                        })
+                        setNotifications((n) => ({ ...n, [key]: checked }))
                       }
                     />
                   </div>
-
-                  <div className="flex items-center justify-between rounded-lg border border-border p-4">
-                    <div>
-                      <p className="font-medium text-foreground">
-                        Push notifications
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        Receive browser notifications for important updates
-                      </p>
-                    </div>
-                    <Switch
-                      checked={notifications.pushNotifications}
-                      onCheckedChange={(checked) =>
-                        setNotifications({
-                          ...notifications,
-                          pushNotifications: checked,
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-lg border border-border p-4">
-                    <div>
-                      <p className="font-medium text-foreground">
-                        Weekly digest
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        Get a weekly summary of your completed tasks
-                      </p>
-                    </div>
-                    <Switch
-                      checked={notifications.weeklyDigest}
-                      onCheckedChange={(checked) =>
-                        setNotifications({
-                          ...notifications,
-                          weeklyDigest: checked,
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-lg border border-border p-4">
-                    <div>
-                      <p className="font-medium text-foreground">
-                        Marketing emails
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        Receive updates about new features and promotions
-                      </p>
-                    </div>
-                    <Switch
-                      checked={notifications.marketingEmails}
-                      onCheckedChange={(checked) =>
-                        setNotifications({
-                          ...notifications,
-                          marketingEmails: checked,
-                        })
-                      }
-                    />
-                  </div>
-                </div>
+                ))}
               </CardContent>
             </Card>
           </TabsContent>
@@ -260,49 +511,42 @@ export default function SettingsPage() {
                   Manage your password and account security.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="space-y-4">
-                  <div className="rounded-lg border border-border p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-foreground">Password</p>
-                        <p className="text-sm text-muted-foreground">
-                          Last changed 30 days ago
-                        </p>
-                      </div>
-                      <Button variant="outline">Change password</Button>
+              <CardContent className="space-y-4">
+                <div className="rounded-lg border border-border p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-foreground">Password</p>
+                      <p className="text-sm text-muted-foreground">
+                        Last changed 30 days ago
+                      </p>
                     </div>
-                  </div>
-
-                  <div className="rounded-lg border border-border p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-foreground">
-                          Two-factor authentication
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          Add an extra layer of security to your account
-                        </p>
-                      </div>
-                      <Button variant="outline">Enable 2FA</Button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-border p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-foreground">
-                          Active sessions
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          Manage your active login sessions
-                        </p>
-                      </div>
-                      <Button variant="outline">View sessions</Button>
-                    </div>
+                    <Button variant="outline">Change password</Button>
                   </div>
                 </div>
-
+                <div className="rounded-lg border border-border p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-foreground">
+                        Two-factor authentication
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Add an extra layer of security to your account
+                      </p>
+                    </div>
+                    <Button variant="outline">Enable 2FA</Button>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-foreground">Active sessions</p>
+                      <p className="text-sm text-muted-foreground">
+                        Manage your active login sessions
+                      </p>
+                    </div>
+                    <Button variant="outline">View sessions</Button>
+                  </div>
+                </div>
                 <div className="border-t border-border pt-6">
                   <h3 className="text-lg font-medium text-destructive">
                     Danger Zone
@@ -311,7 +555,10 @@ export default function SettingsPage() {
                     Irreversible actions that affect your account.
                   </p>
                   <div className="mt-4">
-                    <Button variant="outline" className="text-destructive hover:bg-destructive hover:text-destructive-foreground bg-transparent">
+                    <Button
+                      variant="outline"
+                      className="text-destructive hover:bg-destructive hover:text-destructive-foreground bg-transparent"
+                    >
                       Delete account
                     </Button>
                   </div>
@@ -326,7 +573,7 @@ export default function SettingsPage() {
               <CardHeader>
                 <CardTitle>Appearance</CardTitle>
                 <CardDescription>
-                  Customize how TaskFlow looks on your device.
+                  Customize how Actavio looks on your device.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -364,6 +611,60 @@ export default function SettingsPage() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Connect Integration Dialog */}
+      <Dialog
+        open={connectDialog.open}
+        onOpenChange={(open) => setConnectDialog((d) => ({ ...d, open }))}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              Connect{" "}
+              {connectDialog.provider
+                ? PROVIDER_META[connectDialog.provider].name
+                : ""}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="display-name">Display name</Label>
+              <Input
+                id="display-name"
+                placeholder={
+                  connectDialog.provider
+                    ? `e.g. ${PROVIDER_META[connectDialog.provider].name} — Work`
+                    : ""
+                }
+                value={connectDialog.displayName}
+                onChange={(e) =>
+                  setConnectDialog((d) => ({
+                    ...d,
+                    displayName: e.target.value,
+                  }))
+                }
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional label to identify this connection.
+              </p>
+            </div>
+            <p className="text-xs text-muted-foreground rounded-lg border border-border bg-muted/50 p-3">
+              Credentials are handled by your organisation&apos;s OAuth flow.
+              Click Connect to register this integration.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConnectDialog((d) => ({ ...d, open: false }))}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleConnect}>Connect</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

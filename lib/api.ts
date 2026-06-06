@@ -171,6 +171,51 @@ export interface UpdateTaskInput {
 
 // ── Task endpoints ───────────────────────────────────────────────────────────
 
+// ── Integration types ────────────────────────────────────────────────────────
+
+export type IntegrationProvider =
+  | "GOOGLE_CALENDAR"
+  | "GMAIL"
+  | "OUTLOOK_CALENDAR"
+  | "OUTLOOK_MAIL"
+  | "HUBSPOT"
+  | "SLACK"
+  | "NOTION"
+  | "INTERNAL_TASKS";
+
+export type IntegrationStatus = "DISCONNECTED" | "CONNECTED" | "ERROR";
+
+export interface Integration {
+  id: string;
+  provider: IntegrationProvider;
+  status: IntegrationStatus;
+  displayName: string;
+  lastError: string | null;
+}
+
+// ── Integration endpoints ────────────────────────────────────────────────────
+
+export const integrationsApi = {
+  list: () =>
+    apiFetch<Integration[]>("/api/v1/integrations"),
+
+  connect: (
+    provider: IntegrationProvider,
+    body: { displayName?: string; credentials?: Record<string, unknown> } = {}
+  ) =>
+    apiFetch<Integration>(`/api/v1/integrations/${provider}/connect`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  disconnect: (provider: IntegrationProvider) =>
+    apiFetch<null>(`/api/v1/integrations/${provider}/disconnect`, {
+      method: "DELETE",
+    }),
+};
+
+// ── Task types ───────────────────────────────────────────────────────────────
+
 export const tasksApi = {
   list: () =>
     apiFetch<Task[]>("/api/v1/tasks"),
