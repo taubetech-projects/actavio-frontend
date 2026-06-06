@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { authApi, tokenStore, type AuthTokenResponse, type TenantSummary } from "./api";
+export type { AuthTokenResponse };
 
 export interface User {
   id: string;
@@ -36,6 +37,7 @@ interface AuthContextType {
   verifyEmail: (token: string) => Promise<{ success: boolean; error?: string; requiresTenantSetup?: boolean }>;
   updateUser: (updates: Partial<User>) => void;
   completeOnboarding: () => void;
+  loginWithTokens: (res: AuthTokenResponse, name?: string) => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -243,6 +245,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const loginWithTokens = useCallback((res: AuthTokenResponse, name?: string) => {
+    storeTokens(res);
+    const resolvedName = name || localStorage.getItem(USER_NAME_KEY) || res.user.email.split("@")[0];
+    localStorage.setItem(USER_NAME_KEY, resolvedName);
+    setUser(buildUser(res, resolvedName));
+  }, []);
+
   const completeOnboarding = useCallback(() => {
     localStorage.setItem(ONBOARDING_KEY, "true");
     setUser((prev) => (prev ? { ...prev, onboardingCompleted: true } : null));
@@ -263,6 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         verifyEmail,
         updateUser,
         completeOnboarding,
+        loginWithTokens,
       }}
     >
       {children}

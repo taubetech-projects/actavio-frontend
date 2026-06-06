@@ -14,9 +14,14 @@ import {
   UserX,
   ChevronLeft,
   ChevronRight,
+  UserPlus,
+  Copy,
+  Check,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +29,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -35,6 +55,7 @@ import {
 } from "@/components/ui/table";
 import DashboardLayout from "@/components/dashboard/dashboard-layout";
 import { useAuth } from "@/lib/auth-context";
+import { invitesApi, type TenantRole, type InviteResponse } from "@/lib/api";
 
 interface AdminUser {
   id: string;
@@ -117,6 +138,14 @@ export default function AdminUsersPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "suspended" | "pending">("all");
 
+  // Invite state
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [inviteForm, setInviteForm] = useState<{ email: string; role: TenantRole }>({ email: "", role: "TENANT_MEMBER" });
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState("");
+  const [inviteResult, setInviteResult] = useState<InviteResponse | null>(null);
+  const [copied, setCopied] = useState(false);
+
   useEffect(() => {
     if (!initialized) return;
     if (!user) {
@@ -182,6 +211,34 @@ export default function AdminUsersPage() {
     }
   };
 
+  async function handleInvite() {
+    setInviteError("");
+    setInviting(true);
+    try {
+      const result = await invitesApi.create({ email: inviteForm.email, role: inviteForm.role });
+      setInviteResult(result);
+    } catch (err: unknown) {
+      setInviteError(err instanceof Error ? err.message : "Failed to create invite.");
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  function copyInviteUrl() {
+    if (!inviteResult) return;
+    navigator.clipboard.writeText(inviteResult.inviteUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  function closeInviteDialog() {
+    setInviteDialogOpen(false);
+    setInviteResult(null);
+    setInviteError("");
+    setInviteForm({ email: "", role: "TENANT_MEMBER" });
+    setCopied(false);
+  }
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -193,6 +250,10 @@ export default function AdminUsersPage() {
               {filteredUsers.length} users found
             </p>
           </div>
+          <Button onClick={() => setInviteDialogOpen(true)}>
+            <UserPlus className="mr-2 h-4 w-4" />
+            Invite User
+          </Button>
         </div>
 
         {/* Filters */}
@@ -396,6 +457,101 @@ export default function AdminUsersPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Invite User Dialog */}
+      <Dialog open={inviteDialogOpen} onOpenChange={(open) => { if (!open) closeInviteDialog(); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Invite a team member</DialogTitle>
+            <DialogDescription>
+              Send an invitation link to add someone to your workspace.
+            </DialogDescription>
+          </DialogHeader>
+
+          {inviteResult ? (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-success/30 bg-success/10 p-4">
+                <p className="text-sm font-medium text-foreground mb-1">Invite created!</p>
+                <p className="text-xs text-muted-foreground">
+                  Send this link to <strong>{inviteResult.email}</strong>. It expires at{" "}
+                  {new Date(inviteResult.expiresAt).toLocaleString()}.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>Invite link</Label>
+                <div className="flex gap-2">
+                  <Input
+                    readOnly
+                    value={inviteResult.inviteUrl}
+                    className="font-mono text-xs"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={copyInviteUrl}
+                    aria-label="Copy invite link"
+                  >
+                    {copied ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button onClick={closeInviteDialog}>Done</Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {inviteError && (
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+                  {inviteError}
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="invite-email">Email address</Label>
+                <Input
+                  id="invite-email"
+                  type="email"
+                  placeholder="colleague@example.com"
+                  value={inviteForm.email}
+                  onChange={(e) => setInviteForm((f) => ({ ...f, email: e.target.value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="invite-role">Role</Label>
+                <Select
+                  value={inviteForm.role}
+                  onValueChange={(v) => setInviteForm((f) => ({ ...f, role: v as TenantRole }))}
+                >
+                  <SelectTrigger id="invite-role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="TENANT_MEMBER">Member</SelectItem>
+                    <SelectItem value="TENANT_ADMIN">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={closeInviteDialog} disabled={inviting}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleInvite}
+                  disabled={inviting || !inviteForm.email}
+                >
+                  {inviting ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending…</>
+                  ) : (
+                    "Send invite"
+                  )}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

@@ -144,6 +144,33 @@ export const authApi = {
     ),
 };
 
+// ── Invite types ─────────────────────────────────────────────────────────────
+
+export interface InviteResponse {
+  inviteId: string;
+  email: string;
+  role: TenantRole;
+  expiresAt: string;
+  inviteToken: string;
+  inviteUrl: string;
+}
+
+// ── Invite endpoints ─────────────────────────────────────────────────────────
+
+export const invitesApi = {
+  create: (body: { email: string; role: TenantRole; expiresInHours?: number }) =>
+    apiFetch<InviteResponse>("/api/v1/invites", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  accept: (inviteToken: string, password: string) =>
+    apiFetch<AuthTokenResponse>("/api/v1/invites/accept", {
+      method: "POST",
+      body: JSON.stringify({ inviteToken, password }),
+    }),
+};
+
 // ── Task types ───────────────────────────────────────────────────────────────
 
 export type TaskStatus = "OPEN" | "DONE";
