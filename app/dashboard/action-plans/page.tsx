@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Sparkles,
@@ -46,6 +46,11 @@ import {
   type ActionType,
   type RiskLevel,
   type ActionPlanStatus,
+  type ActionExecutionResult,
+  type ConfirmResponse,
+  type ReadEmailRaw,
+  type CreateCalendarEventRaw,
+  type RescheduleCalendarEventRaw,
 } from "@/lib/api";
 
 // ── Metadata maps ─────────────────────────────────────────────────────────────
@@ -91,62 +96,150 @@ type Phase =
   | { kind: "idle" }
   | { kind: "previewing" }
   | { kind: "draft"; plan: ActionPlanDetail }
-  | { kind: "executing"; planId: string }
-  | { kind: "result"; plan: ActionPlanDetail }
+  | { kind: "confirming" }
+  | { kind: "result"; plan: ActionPlanDetail; result: ConfirmResponse }
   | { kind: "error"; message: string };
 
 // Mutable payload fields tracked per action index.
 type PayloadEdits = Partial<Record<number, Record<string, string>>>;
 
+// Field-level validation errors per action index.
+type ValidationErrors = Partial<Record<number, Record<string, string>>>;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+const EMAIL_REGEX = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+function isValidDatetime(value: string): boolean {
+  if (!value.trim()) return false;
+  return !isNaN(new Date(value).getTime());
+}
+
+// Converts an ISO-8601 string to the `datetime-local` input format (YYYY-MM-DDTHH:mm).
+function toDatetimeLocal(iso: string): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return "";
+  }
+}
 
 function initPayloadEdits(plan: ActionPlanDetail): PayloadEdits {
   const edits: PayloadEdits = {};
   for (const action of plan.actions) {
-    if (action.provider !== "GMAIL") continue;
     const p = action.payload as Record<string, string | number>;
-    if (action.type === "DRAFT_EMAIL" || action.type === "SEND_EMAIL") {
-      edits[action.index] = {
-        to:      String(p.to      ?? ""),
-        subject: String(p.subject ?? ""),
-        body:    String(p.body    ?? ""),
-        cc:      String(p.cc      ?? ""),
-        bcc:     String(p.bcc     ?? ""),
-      };
-    } else if (action.type === "READ_EMAIL") {
-      edits[action.index] = {
-        query:      String(p.query      ?? "in:inbox is:unread"),
-        maxResults: String(p.maxResults ?? "5"),
-      };
+
+    if (action.provider === "GMAIL") {
+      if (action.type === "DRAFT_EMAIL" || action.type === "SEND_EMAIL") {
+        edits[action.index] = {
+          to:      String(p.to      ?? ""),
+          subject: String(p.subject ?? ""),
+          body:    String(p.body    ?? ""),
+          cc:      String(p.cc      ?? ""),
+          bcc:     String(p.bcc     ?? ""),
+        };
+      } else if (action.type === "READ_EMAIL") {
+        edits[action.index] = {
+          query:      String(p.query      ?? "in:inbox is:unread"),
+          maxResults: String(p.maxResults ?? "5"),
+        };
+      }
+    }
+
+    if (action.provider === "GOOGLE_CALENDAR") {
+      if (action.type === "CREATE_CALENDAR_EVENT") {
+        edits[action.index] = {
+          title:         String(p.title         ?? ""),
+          startDateTime: toDatetimeLocal(String(p.startDateTime ?? "")),
+          endDateTime:   toDatetimeLocal(String(p.endDateTime   ?? "")),
+          description:   String(p.description   ?? ""),
+          location:      String(p.location      ?? ""),
+        };
+      } else if (action.type === "RESCHEDULE_CALENDAR_EVENT") {
+        edits[action.index] = {
+          searchQuery:           String(p.searchQuery           ?? ""),
+          originalStartDateTime: toDatetimeLocal(String(p.originalStartDateTime ?? p.startDateTime ?? "")),
+          startDateTime:         toDatetimeLocal(String(p.startDateTime         ?? "")),
+          endDateTime:           toDatetimeLocal(String(p.endDateTime           ?? "")),
+        };
+      }
     }
   }
   return edits;
 }
 
-// Returns a human-readable error if the plan cannot be confirmed yet, null otherwise.
-function validatePayloadEdits(plan: ActionPlanDetail, edits: PayloadEdits): string | null {
+// Per-action field-level validation. Returns an empty object when the plan is ready to confirm.
+function validatePayloadEdits(plan: ActionPlanDetail, edits: PayloadEdits): ValidationErrors {
+  const result: ValidationErrors = {};
+
   for (const action of plan.actions) {
+    const f = edits[action.index] ?? {};
+    const e: Record<string, string> = {};
+
     if (action.type === "SEND_EMAIL") {
-      const to = edits[action.index]?.to?.trim() ?? "";
-      if (!to) return "A recipient (To) is required before sending.";
+      const to = f.to?.trim() ?? "";
+      if (!to) {
+        e.to = "Recipient is required.";
+      } else if (!EMAIL_REGEX.test(to)) {
+        e.to = "Enter a valid email address.";
+      }
     }
+
+    if (action.type === "CREATE_CALENDAR_EVENT") {
+      if (!f.startDateTime?.trim()) {
+        e.startDateTime = "Start time is required.";
+      } else if (!isValidDatetime(f.startDateTime)) {
+        e.startDateTime = "Enter a valid date and time.";
+      }
+      if (!f.endDateTime?.trim()) {
+        e.endDateTime = "End time is required.";
+      } else if (!isValidDatetime(f.endDateTime)) {
+        e.endDateTime = "Enter a valid date and time.";
+      }
+    }
+
+    if (action.type === "RESCHEDULE_CALENDAR_EVENT") {
+      if (!f.searchQuery?.trim()) {
+        e.searchQuery = "Event description is required to locate the event.";
+      }
+      if (!f.startDateTime?.trim()) {
+        e.startDateTime = "New start time is required.";
+      } else if (!isValidDatetime(f.startDateTime)) {
+        e.startDateTime = "Enter a valid date and time.";
+      }
+      if (!f.endDateTime?.trim()) {
+        e.endDateTime = "New end time is required.";
+      } else if (!isValidDatetime(f.endDateTime)) {
+        e.endDateTime = "Enter a valid date and time.";
+      }
+    }
+
+    if (Object.keys(e).length > 0) result[action.index] = e;
   }
-  return null;
+
+  return result;
 }
 
-// Returns the action-specific confirm button label for a plan.
 function confirmButtonLabel(plan: ActionPlanDetail): string {
   if (plan.actions.length === 1) {
-    if (plan.actions[0].type === "DRAFT_EMAIL") return "Create Draft";
-    if (plan.actions[0].type === "SEND_EMAIL")  return "Send Email";
-    if (plan.actions[0].type === "READ_EMAIL")  return "Fetch Emails";
+    switch (plan.actions[0].type) {
+      case "DRAFT_EMAIL":               return "Create Draft";
+      case "SEND_EMAIL":                return "Send Email";
+      case "READ_EMAIL":                return "Fetch Emails";
+      case "CREATE_CALENDAR_EVENT":     return "Create Event";
+      case "RESCHEDULE_CALENDAR_EVENT": return "Reschedule Event";
+    }
   }
   if (plan.riskLevel === "HIGH")   return "Review & Confirm";
   if (plan.riskLevel === "MEDIUM") return "Confirm plan";
   return "Confirm & execute";
 }
 
-// ── Payload summary (used in non-Gmail ActionCard) ────────────────────────────
+// ── Payload summary (read-only, for non-editable action types) ────────────────
 
 function payloadSummary(type: ActionType, payload: Record<string, unknown>): string {
   const p = payload as Record<string, string>;
@@ -176,7 +269,7 @@ function RiskBadge({ level }: { level: RiskLevel }) {
   );
 }
 
-// Read-only action card used for non-Gmail actions and in the result phase.
+// Read-only card for non-editable action types and the result phase.
 function ActionCard({ action }: { action: ActionPlanDetail["actions"][number] }) {
   const meta = ACTION_META[action.type];
   const Icon = meta?.icon;
@@ -198,14 +291,16 @@ function ActionCard({ action }: { action: ActionPlanDetail["actions"][number] })
   );
 }
 
-// Editable fields for Gmail-specific payload review.
+// Editable Gmail payload form.
 function GmailPayloadEditor({
   action,
   edits,
+  errors,
   onChange,
 }: {
   action: ActionPlanDetail["actions"][number];
   edits: Record<string, string>;
+  errors: Record<string, string>;
   onChange: (field: string, value: string) => void;
 }) {
   if (action.type === "DRAFT_EMAIL") {
@@ -243,7 +338,6 @@ function GmailPayloadEditor({
   }
 
   if (action.type === "SEND_EMAIL") {
-    const toEmpty = !(edits.to?.trim());
     return (
       <div className="space-y-3">
         <div className="space-y-1.5">
@@ -254,51 +348,27 @@ function GmailPayloadEditor({
             value={edits.to ?? ""}
             onChange={e => onChange("to", e.target.value)}
             placeholder="recipient@example.com"
-            className={`h-8 text-sm ${toEmpty ? "border-destructive focus-visible:ring-destructive" : ""}`}
+            className={`h-8 text-sm ${errors.to ? "border-destructive focus-visible:ring-destructive" : ""}`}
           />
-          {toEmpty && (
-            <p className="text-xs text-destructive">
-              Required — cannot send without a recipient.
-            </p>
-          )}
+          {errors.to && <p className="text-xs text-destructive">{errors.to}</p>}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">CC</Label>
-            <Input
-              value={edits.cc ?? ""}
-              onChange={e => onChange("cc", e.target.value)}
-              placeholder="Optional"
-              className="h-8 text-sm"
-            />
+            <Input value={edits.cc ?? ""} onChange={e => onChange("cc", e.target.value)} placeholder="Optional" className="h-8 text-sm" />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">BCC</Label>
-            <Input
-              value={edits.bcc ?? ""}
-              onChange={e => onChange("bcc", e.target.value)}
-              placeholder="Optional"
-              className="h-8 text-sm"
-            />
+            <Input value={edits.bcc ?? ""} onChange={e => onChange("bcc", e.target.value)} placeholder="Optional" className="h-8 text-sm" />
           </div>
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">Subject</Label>
-          <Input
-            value={edits.subject ?? ""}
-            onChange={e => onChange("subject", e.target.value)}
-            placeholder="Subject"
-            className="h-8 text-sm"
-          />
+          <Input value={edits.subject ?? ""} onChange={e => onChange("subject", e.target.value)} placeholder="Subject" className="h-8 text-sm" />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">Body</Label>
-          <Textarea
-            value={edits.body ?? ""}
-            onChange={e => onChange("body", e.target.value)}
-            placeholder="Email body…"
-            className="min-h-[80px] text-sm resize-none"
-          />
+          <Textarea value={edits.body ?? ""} onChange={e => onChange("body", e.target.value)} placeholder="Email body…" className="min-h-[80px] text-sm resize-none" />
         </div>
       </div>
     );
@@ -346,18 +416,134 @@ function GmailPayloadEditor({
   return null;
 }
 
-// Expanded card with editable fields for Gmail actions in the draft phase.
-function GmailActionCard({
+// Editable Google Calendar payload form.
+function CalendarPayloadEditor({
   action,
   edits,
+  errors,
+  onChange,
+}: {
+  action: ActionPlanDetail["actions"][number];
+  edits: Record<string, string>;
+  errors: Record<string, string>;
+  onChange: (field: string, value: string) => void;
+}) {
+  if (action.type === "CREATE_CALENDAR_EVENT") {
+    return (
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Title</Label>
+          <Input value={edits.title ?? ""} onChange={e => onChange("title", e.target.value)} placeholder="Meeting title" className="h-8 text-sm" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              Start <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              type="datetime-local"
+              value={edits.startDateTime ?? ""}
+              onChange={e => onChange("startDateTime", e.target.value)}
+              className={`h-8 text-sm ${errors.startDateTime ? "border-destructive" : ""}`}
+            />
+            {errors.startDateTime && <p className="text-xs text-destructive">{errors.startDateTime}</p>}
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              End <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              type="datetime-local"
+              value={edits.endDateTime ?? ""}
+              onChange={e => onChange("endDateTime", e.target.value)}
+              className={`h-8 text-sm ${errors.endDateTime ? "border-destructive" : ""}`}
+            />
+            {errors.endDateTime && <p className="text-xs text-destructive">{errors.endDateTime}</p>}
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Description</Label>
+          <Textarea value={edits.description ?? ""} onChange={e => onChange("description", e.target.value)} placeholder="Optional" className="min-h-[60px] text-sm resize-none" />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Location</Label>
+          <Input value={edits.location ?? ""} onChange={e => onChange("location", e.target.value)} placeholder="Optional" className="h-8 text-sm" />
+        </div>
+      </div>
+    );
+  }
+
+  if (action.type === "RESCHEDULE_CALENDAR_EVENT") {
+    return (
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">
+            Event to reschedule <span className="text-destructive">*</span>
+          </Label>
+          <Input
+            value={edits.searchQuery ?? ""}
+            onChange={e => onChange("searchQuery", e.target.value)}
+            placeholder="Event title or keywords"
+            className={`h-8 text-sm ${errors.searchQuery ? "border-destructive" : ""}`}
+          />
+          {errors.searchQuery && <p className="text-xs text-destructive">{errors.searchQuery}</p>}
+        </div>
+        {edits.originalStartDateTime && (
+          <p className="text-xs text-muted-foreground">
+            Current time (AI detected): {new Date(edits.originalStartDateTime).toLocaleString()}
+          </p>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              New start <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              type="datetime-local"
+              value={edits.startDateTime ?? ""}
+              onChange={e => onChange("startDateTime", e.target.value)}
+              className={`h-8 text-sm ${errors.startDateTime ? "border-destructive" : ""}`}
+            />
+            {errors.startDateTime && <p className="text-xs text-destructive">{errors.startDateTime}</p>}
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              New end <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              type="datetime-local"
+              value={edits.endDateTime ?? ""}
+              onChange={e => onChange("endDateTime", e.target.value)}
+              className={`h-8 text-sm ${errors.endDateTime ? "border-destructive" : ""}`}
+            />
+            {errors.endDateTime && <p className="text-xs text-destructive">{errors.endDateTime}</p>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// Expanded card with editable payload for Gmail and Calendar actions.
+function EditableActionCard({
+  action,
+  edits,
+  errors,
   onFieldChange,
 }: {
   action: ActionPlanDetail["actions"][number];
   edits: Record<string, string>;
+  errors: Record<string, string>;
   onFieldChange: (actionIndex: number, field: string, value: string) => void;
 }) {
+  const isEditable = action.provider === "GMAIL" || action.provider === "GOOGLE_CALENDAR";
+  if (!isEditable) return <ActionCard action={action} />;
+
   const meta = ACTION_META[action.type];
   const Icon = meta?.icon;
+
   return (
     <div className="rounded-lg border border-border p-4 space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -369,60 +555,162 @@ function GmailActionCard({
         </div>
         <RiskBadge level={action.riskLevel} />
       </div>
-      <GmailPayloadEditor
-        action={action}
-        edits={edits}
-        onChange={(field, value) => onFieldChange(action.index, field, value)}
-      />
+      {action.provider === "GMAIL" && (
+        <GmailPayloadEditor
+          action={action}
+          edits={edits}
+          errors={errors}
+          onChange={(field, value) => onFieldChange(action.index, field, value)}
+        />
+      )}
+      {action.provider === "GOOGLE_CALENDAR" && (
+        <CalendarPayloadEditor
+          action={action}
+          edits={edits}
+          errors={errors}
+          onChange={(field, value) => onFieldChange(action.index, field, value)}
+        />
+      )}
     </div>
   );
 }
 
-// Post-success contextual links for Gmail actions.
-function GmailSuccessLinks({ plan }: { plan: ActionPlanDetail }) {
-  const gmailActions = plan.actions.filter(a => a.provider === "GMAIL");
-  if (gmailActions.length === 0) return null;
+// Per-action result card shown in the result phase.
+function ActionResultCard({
+  action,
+  result,
+  onGoToSettings,
+}: {
+  action: ActionPlanDetail["actions"][number];
+  result: ActionExecutionResult;
+  onGoToSettings: () => void;
+}) {
+  const meta = ACTION_META[action.type];
+  const Icon = meta?.icon;
+  const ok = result.status === "SUCCESS";
+  const credentialError = result.errorCode === "NO_CREDENTIALS" || result.errorCode === "TOKEN_EXPIRED";
 
   return (
-    <div className="flex flex-col items-center gap-1.5">
-      {gmailActions.map(action => {
-        if (action.type === "DRAFT_EMAIL") {
-          return (
-            <a
-              key={action.index}
-              href="https://mail.google.com/mail/#drafts"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
+    <div className="rounded-lg border border-border p-4 space-y-2.5">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted">
+            <Icon className="h-3.5 w-3.5 text-foreground" />
+          </div>
+          <span className="font-medium text-sm text-foreground">{meta?.label}</span>
+        </div>
+        {ok ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+            <CheckCircle2 className="h-3 w-3" />
+            Done
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+            <XCircle className="h-3 w-3" />
+            Failed
+          </span>
+        )}
+      </div>
+
+      {/* Success content */}
+      {ok && (
+        <>
+          {action.type === "DRAFT_EMAIL" && (
+            <a href="https://mail.google.com/mail/#drafts" target="_blank" rel="noopener noreferrer"
+               className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
               <ExternalLink className="h-3.5 w-3.5" />
               Open Drafts in Gmail
             </a>
-          );
-        }
-        if (action.type === "SEND_EMAIL") {
-          return (
-            <a
-              key={action.index}
-              href="https://mail.google.com/mail/#sent"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
+          )}
+
+          {action.type === "SEND_EMAIL" && (
+            <a href="https://mail.google.com/mail/#sent" target="_blank" rel="noopener noreferrer"
+               className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
               <ExternalLink className="h-3.5 w-3.5" />
-              View Sent Mail in Gmail
+              View Sent Mail
             </a>
-          );
-        }
-        if (action.type === "READ_EMAIL") {
-          return (
-            <p key={action.index} className="text-xs text-muted-foreground">
-              Emails were fetched and stored. A results panel is coming in a future update.
+          )}
+
+          {action.type === "READ_EMAIL" && result.raw && (() => {
+            const raw = result.raw as unknown as ReadEmailRaw;
+            return (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  {raw.count} email{raw.count !== 1 ? "s" : ""} fetched
+                </p>
+                <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                  {raw.messages.map(msg => (
+                    <div key={msg.id} className="rounded border border-border p-2.5">
+                      <div className="flex items-start justify-between gap-2 mb-0.5">
+                        <span className="text-xs font-medium text-foreground truncate">
+                          {msg.subject || "(no subject)"}
+                        </span>
+                        <span className="text-xs text-muted-foreground shrink-0">{msg.date}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">{msg.from}</p>
+                      {msg.snippet && (
+                        <p className="text-xs text-muted-foreground/70 mt-1 line-clamp-2">{msg.snippet}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
+          {action.type === "CREATE_CALENDAR_EVENT" && result.raw && (() => {
+            const raw = result.raw as unknown as CreateCalendarEventRaw;
+            return (
+              <a href={raw.htmlLink} target="_blank" rel="noopener noreferrer"
+                 className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open in Google Calendar
+              </a>
+            );
+          })()}
+
+          {action.type === "RESCHEDULE_CALENDAR_EVENT" && result.raw && (() => {
+            const raw = result.raw as unknown as RescheduleCalendarEventRaw;
+            return (
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium text-foreground">Rescheduled: {raw.title}</p>
+                <p className="text-xs text-muted-foreground">
+                  {new Date(raw.oldStartDateTime).toLocaleString()}
+                  {" → "}
+                  {new Date(raw.newStartDateTime).toLocaleString()}
+                </p>
+                <a href={raw.htmlLink} target="_blank" rel="noopener noreferrer"
+                   className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  View in Google Calendar
+                </a>
+              </div>
+            );
+          })()}
+        </>
+      )}
+
+      {/* Failed content */}
+      {!ok && (
+        <div className="space-y-2">
+          {result.messageUser && (
+            <p className="text-sm text-destructive">{result.messageUser}</p>
+          )}
+
+          {result.errorCode === "EVENT_NOT_FOUND" && (
+            <p className="text-xs text-muted-foreground">
+              We couldn&apos;t find the event. Check Google Calendar and try again with a more specific description.
             </p>
-          );
-        }
-        return null;
-      })}
+          )}
+
+          {credentialError && (
+            <Button variant="outline" size="sm" onClick={onGoToSettings} className="text-xs h-7">
+              {action.provider === "GMAIL" ? "Reconnect Gmail" : "Reconnect Google Calendar"}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -529,8 +817,6 @@ export default function ActionPlansPage() {
   const [confirmText, setConfirmText] = useState("");
   const [mediumDialog, setMediumDialog] = useState<{ open: boolean; plan: ActionPlanDetail | null }>({ open: false, plan: null });
 
-  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   useEffect(() => {
     if (!initialized) return;
     if (!user) router.push("/login");
@@ -551,36 +837,15 @@ export default function ActionPlansPage() {
     if (initialized && user) loadHistory();
   }, [initialized, user, loadHistory]);
 
-  useEffect(() => {
-    if (phase.kind !== "executing") return;
-    const planId = phase.planId;
-
-    async function poll() {
-      try {
-        const detail = await actionPlansApi.get(planId);
-        if (detail.status === "SUCCESS" || detail.status === "FAILED" || detail.status === "CANCELLED") {
-          setPhase({ kind: "result", plan: detail });
-          loadHistory();
-        } else {
-          pollingRef.current = setTimeout(poll, 2500);
-        }
-      } catch {
-        pollingRef.current = setTimeout(poll, 4000);
-      }
-    }
-
-    pollingRef.current = setTimeout(poll, 2500);
-    return () => {
-      if (pollingRef.current) clearTimeout(pollingRef.current);
-    };
-  }, [phase, loadHistory]);
-
   if (!initialized || !user) return null;
 
-  // ── Derived draft-phase values (safe to compute unconditionally) ──
+  // ── Derived draft-phase values ──
 
   const draftPlan = phase.kind === "draft" ? phase.plan : null;
-  const draftValidationError = draftPlan ? validatePayloadEdits(draftPlan, payloadEdits) : null;
+  const draftValidationErrors: ValidationErrors = draftPlan
+    ? validatePayloadEdits(draftPlan, payloadEdits)
+    : {};
+  const draftHasErrors = Object.keys(draftValidationErrors).length > 0;
   const draftHasSendEmail = draftPlan ? draftPlan.actions.some(a => a.type === "SEND_EMAIL") : false;
 
   // ── Handlers ──
@@ -605,16 +870,18 @@ export default function ActionPlansPage() {
   }
 
   async function executeConfirm(plan: ActionPlanDetail) {
-    setPhase({ kind: "executing", planId: plan.actionPlanId });
+    setPhase({ kind: "confirming" });
     try {
-      await actionPlansApi.confirm(plan.actionPlanId);
+      const result = await actionPlansApi.confirm(plan.actionPlanId);
+      setPhase({ kind: "result", plan, result });
+      loadHistory();
     } catch (err: unknown) {
       setPhase({ kind: "error", message: err instanceof Error ? err.message : "Confirm failed." });
     }
   }
 
   function handleConfirm(plan: ActionPlanDetail) {
-    if (validatePayloadEdits(plan, payloadEdits)) return; // inline error already visible
+    if (Object.keys(validatePayloadEdits(plan, payloadEdits)).length > 0) return;
     if (plan.riskLevel === "HIGH") {
       setConfirmText("");
       setConfirmDialog({ open: true, plan });
@@ -655,7 +922,7 @@ export default function ActionPlansPage() {
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}
               className="min-h-[100px] resize-none text-base"
-              disabled={phase.kind === "previewing" || phase.kind === "executing"}
+              disabled={phase.kind === "previewing" || phase.kind === "confirming"}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handlePreview();
               }}
@@ -671,7 +938,7 @@ export default function ActionPlansPage() {
                 )}
                 <Button
                   onClick={handlePreview}
-                  disabled={!instruction.trim() || phase.kind === "previewing" || phase.kind === "executing"}
+                  disabled={!instruction.trim() || phase.kind === "previewing" || phase.kind === "confirming"}
                 >
                   {phase.kind === "previewing" ? (
                     <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Analysing...</>
@@ -695,23 +962,19 @@ export default function ActionPlansPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-3">
-                {phase.plan.actions.map((action) =>
-                  action.provider === "GMAIL" ? (
-                    <GmailActionCard
-                      key={action.index}
-                      action={action}
-                      edits={payloadEdits[action.index] ?? {}}
-                      onFieldChange={setPayloadField}
-                    />
-                  ) : (
-                    <ActionCard key={action.index} action={action} />
-                  )
-                )}
+                {phase.plan.actions.map((action) => (
+                  <EditableActionCard
+                    key={action.index}
+                    action={action}
+                    edits={payloadEdits[action.index] ?? {}}
+                    errors={draftValidationErrors[action.index] ?? {}}
+                    onFieldChange={setPayloadField}
+                  />
+                ))}
               </div>
 
               <ExplainSection explain={phase.plan.explain} />
 
-              {/* SEND_EMAIL: specific irreversible-action warning */}
               {draftHasSendEmail && (
                 <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -719,7 +982,6 @@ export default function ActionPlansPage() {
                 </div>
               )}
 
-              {/* Non-email HIGH risk warning */}
               {!draftHasSendEmail && phase.plan.riskLevel === "HIGH" && (
                 <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -730,7 +992,7 @@ export default function ActionPlansPage() {
               <div className="flex gap-3 pt-2">
                 <Button
                   onClick={() => handleConfirm(phase.plan)}
-                  disabled={!!draftValidationError}
+                  disabled={draftHasErrors}
                   className="flex-1"
                 >
                   {confirmButtonLabel(phase.plan)}
@@ -741,8 +1003,8 @@ export default function ActionPlansPage() {
           </Card>
         )}
 
-        {/* Executing phase */}
-        {phase.kind === "executing" && (
+        {/* Confirming phase */}
+        {phase.kind === "confirming" && (
           <Card>
             <CardContent className="pt-6">
               <div className="flex flex-col items-center justify-center py-8 gap-4 text-center">
@@ -752,9 +1014,7 @@ export default function ActionPlansPage() {
                 </div>
                 <div>
                   <p className="font-semibold text-foreground">Executing plan</p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Actions are running. This may take a moment…
-                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">Actions are running…</p>
                 </div>
               </div>
             </CardContent>
@@ -765,50 +1025,37 @@ export default function ActionPlansPage() {
         {phase.kind === "result" && (
           <Card>
             <CardContent className="pt-6 space-y-4">
-              <div className="flex flex-col items-center justify-center py-6 gap-3 text-center">
-                {phase.plan.status === "SUCCESS" ? (
+              <div className="flex flex-col items-center text-center gap-2 py-4">
+                {phase.result.status === "SUCCESS" ? (
                   <>
                     <CheckCircle2 className="h-12 w-12 text-success" />
-                    <p className="text-lg font-semibold text-foreground">
-                      {phase.plan.actions.length === 1 && phase.plan.actions[0].type === "READ_EMAIL"
-                        ? "Emails fetched successfully"
-                        : "Plan executed successfully"}
-                    </p>
-                    <p className="text-sm text-muted-foreground">All actions completed.</p>
-                    <GmailSuccessLinks plan={phase.plan} />
+                    <p className="text-lg font-semibold text-foreground">Plan executed successfully</p>
                   </>
                 ) : (
                   <>
                     <XCircle className="h-12 w-12 text-destructive" />
-                    <p className="text-lg font-semibold text-foreground">
-                      {phase.plan.status === "CANCELLED" ? "Plan cancelled" : "Plan failed"}
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      {phase.plan.status === "CANCELLED"
-                        ? "The plan was cancelled before completion."
-                        : "One or more actions could not be completed."}
-                    </p>
-                    {phase.plan.status === "FAILED" && phase.plan.actions.some(a => a.provider === "GMAIL") && (
-                      <p className="text-xs text-muted-foreground">
-                        If Gmail is not connected,{" "}
-                        <button
-                          type="button"
-                          onClick={() => router.push("/dashboard/settings")}
-                          className="underline hover:no-underline"
-                        >
-                          connect it in Settings
-                        </button>{" "}
-                        and try again.
-                      </p>
-                    )}
+                    <p className="text-lg font-semibold text-foreground">Some actions failed</p>
+                    <p className="text-sm text-muted-foreground">Check the individual results below.</p>
                   </>
                 )}
               </div>
-              <div className="space-y-2">
-                {phase.plan.actions.map((action) => (
-                  <ActionCard key={action.index} action={action} />
-                ))}
+
+              {/* Per-action result cards */}
+              <div className="space-y-3">
+                {phase.plan.actions.map(action => {
+                  const actionResult = (phase.result.actions ?? []).find(r => r.index === action.index);
+                  if (!actionResult) return <ActionCard key={action.index} action={action} />;
+                  return (
+                    <ActionResultCard
+                      key={action.index}
+                      action={action}
+                      result={actionResult}
+                      onGoToSettings={() => router.push("/dashboard/settings")}
+                    />
+                  );
+                })}
               </div>
+
               <Button className="w-full" onClick={reset}>
                 <RotateCcw className="mr-2 h-4 w-4" />
                 Start a new instruction
@@ -854,11 +1101,8 @@ export default function ActionPlansPage() {
         </div>
       </div>
 
-      {/* MEDIUM risk confirmation dialog */}
-      <Dialog
-        open={mediumDialog.open}
-        onOpenChange={(open) => setMediumDialog((d) => ({ ...d, open }))}
-      >
+      {/* MEDIUM risk dialog */}
+      <Dialog open={mediumDialog.open} onOpenChange={(open) => setMediumDialog((d) => ({ ...d, open }))}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -886,7 +1130,7 @@ export default function ActionPlansPage() {
         </DialogContent>
       </Dialog>
 
-      {/* HIGH risk confirmation dialog */}
+      {/* HIGH risk dialog */}
       <Dialog
         open={confirmDialog.open}
         onOpenChange={(open) => {
@@ -902,14 +1146,9 @@ export default function ActionPlansPage() {
             </DialogTitle>
             <DialogDescription>
               {confirmDialog.plan?.actions.some(a => a.type === "SEND_EMAIL") ? (
-                <>
-                  This will <strong>immediately send the email</strong>. Type{" "}
-                  <strong>CONFIRM</strong> to proceed.
-                </>
+                <>This will <strong>immediately send the email</strong>. Type <strong>CONFIRM</strong> to proceed.</>
               ) : (
-                <>
-                  Type <strong>CONFIRM</strong> below to execute this high-risk plan.
-                </>
+                <>Type <strong>CONFIRM</strong> below to execute this high-risk plan.</>
               )}
             </DialogDescription>
           </DialogHeader>

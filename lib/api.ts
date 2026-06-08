@@ -312,10 +312,50 @@ export interface ActionPlanSummary {
   confirmedAt: string | null;
 }
 
+// Per-action execution result returned by the confirm endpoint.
+export interface ActionExecutionResult {
+  index: number;
+  status: "SUCCESS" | "FAILED";
+  link: string | null;
+  errorCode: string | null;
+  messageUser: string | null;
+  raw: Record<string, unknown> | null;
+}
+
+export interface ReadEmailMessage {
+  id: string;
+  threadId: string;
+  snippet: string;
+  subject: string;
+  from: string;
+  date: string;
+}
+
+export interface ReadEmailRaw {
+  count: number;
+  messages: ReadEmailMessage[];
+}
+
+export interface CreateCalendarEventRaw {
+  eventId: string;
+  title: string;
+  htmlLink: string;
+  newStartDateTime: string;
+  newEndDateTime: string;
+}
+
+export interface RescheduleCalendarEventRaw {
+  eventId: string;
+  title: string;
+  htmlLink: string;
+  oldStartDateTime: string;
+  newStartDateTime: string;
+  newEndDateTime: string;
+}
+
 export interface ConfirmResponse {
-  status: ActionPlanStatus;
-  requestId: string;
-  engineType: ExecutionEngineType;
+  status: "SUCCESS" | "FAILED";
+  actions: ActionExecutionResult[];
 }
 
 // ── Action plan endpoints ─────────────────────────────────────────────────────
