@@ -102,6 +102,17 @@ const PROVIDER_META: Record<
 
 const ALL_PROVIDERS = Object.keys(PROVIDER_META) as IntegrationProvider[];
 
+// Providers that use an OAuth2 redirect flow — all except credential-free internal ones.
+const OAUTH_PROVIDERS = new Set<IntegrationProvider>([
+  "GOOGLE_CALENDAR",
+  "GMAIL",
+  "HUBSPOT",
+  "SLACK",
+  "NOTION",
+  "OUTLOOK_CALENDAR",
+  "OUTLOOK_MAIL",
+]);
+
 // ── Status badge ─────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: Integration["status"] }) {
@@ -226,6 +237,8 @@ export default function SettingsPage() {
   const [connectingProvider, setConnectingProvider] =
     useState<IntegrationProvider | null>(null);
   const [disconnectingProvider, setDisconnectingProvider] =
+    useState<IntegrationProvider | null>(null);
+  const [oauthInitiating, setOAuthInitiating] =
     useState<IntegrationProvider | null>(null);
   const [connectDialog, setConnectDialog] = useState<{
     open: boolean;
@@ -354,6 +367,29 @@ export default function SettingsPage() {
       loadIntegrations();
     } finally {
       setDisconnectingProvider(null);
+    }
+  }
+
+  async function handleOAuthConnect(provider: IntegrationProvider) {
+    setOAuthInitiating(provider);
+    setIntegrationsError(null);
+    try {
+      const { authorizationUrl } = await integrationsApi.initiateOAuth(provider);
+      // Browser navigates away — spinner stays until the page unloads.
+      window.location.href = authorizationUrl;
+    } catch (err: unknown) {
+      setIntegrationsError(
+        err instanceof Error ? err.message : "Failed to start the OAuth connection. Please try again."
+      );
+      setOAuthInitiating(null);
+    }
+  }
+
+  function handleConnectClick(provider: IntegrationProvider) {
+    if (OAUTH_PROVIDERS.has(provider)) {
+      handleOAuthConnect(provider);
+    } else {
+      openConnectDialog(provider);
     }
   }
 
@@ -606,13 +642,14 @@ export default function SettingsPage() {
                   <div className="grid gap-4 sm:grid-cols-2">
                     {ALL_PROVIDERS.map((provider) => {
                       const meta = PROVIDER_META[provider];
-                      const Icon = meta.icon;
+                      const Icon = meta?.icon;
                       const integration = integrations[provider];
                       const status = integration?.status ?? "DISCONNECTED";
                       const isConnected = status === "CONNECTED";
                       const isConnecting = connectingProvider === provider;
                       const isDisconnecting = disconnectingProvider === provider;
-                      const isBusy = isConnecting || isDisconnecting;
+                      const isOAuthInitiating = oauthInitiating === provider;
+                      const isBusy = isConnecting || isDisconnecting || isOAuthInitiating;
 
                       return (
                         <div
@@ -669,9 +706,9 @@ export default function SettingsPage() {
                                 variant="outline"
                                 size="sm"
                                 disabled={isBusy}
-                                onClick={() => openConnectDialog(provider)}
+                                onClick={() => handleConnectClick(provider)}
                               >
-                                {isConnecting ? (
+                                {isConnecting || isOAuthInitiating ? (
                                   <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                                 ) : (
                                   <Plug className="mr-1.5 h-3 w-3" />

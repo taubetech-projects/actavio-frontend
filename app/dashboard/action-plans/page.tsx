@@ -18,12 +18,16 @@ import {
   Calendar,
   CalendarClock,
   Mail,
+  Inbox,
   Zap,
   BarChart2,
   TrendingUp,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -33,7 +37,6 @@ import {
   DialogFooter,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import DashboardLayout from "@/components/dashboard/dashboard-layout";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -48,33 +51,41 @@ import {
 // ── Metadata maps ─────────────────────────────────────────────────────────────
 
 const ACTION_META: Record<ActionType, { label: string; icon: React.ElementType }> = {
-  CREATE_TASK:                 { label: "Create task",                  icon: ListTodo },
-  UPDATE_TASK:                 { label: "Update task",                  icon: Edit },
-  CREATE_CALENDAR_EVENT:       { label: "Create calendar event",        icon: Calendar },
-  RESCHEDULE_CALENDAR_EVENT:   { label: "Reschedule calendar event",    icon: CalendarClock },
-  DRAFT_EMAIL:                 { label: "Draft email",                  icon: Mail },
-  SEND_EMAIL:                  { label: "Send email",                   icon: Send },
-  TRIGGER_WORKFLOW:            { label: "Trigger workflow",             icon: Zap },
-  LOG_CRM_ACTIVITY:            { label: "Log CRM activity",             icon: BarChart2 },
-  UPDATE_DEAL_STATUS:          { label: "Update deal status",           icon: TrendingUp },
+  CREATE_TASK:               { label: "Create task",               icon: ListTodo },
+  UPDATE_TASK:               { label: "Update task",               icon: Edit },
+  CREATE_CALENDAR_EVENT:     { label: "Create calendar event",     icon: Calendar },
+  RESCHEDULE_CALENDAR_EVENT: { label: "Reschedule calendar event", icon: CalendarClock },
+  DRAFT_EMAIL:               { label: "Draft email",               icon: Mail },
+  SEND_EMAIL:                { label: "Send email",                icon: Send },
+  READ_EMAIL:                { label: "Read emails",               icon: Inbox },
+  TRIGGER_WORKFLOW:          { label: "Trigger workflow",          icon: Zap },
+  LOG_CRM_ACTIVITY:          { label: "Log CRM activity",          icon: BarChart2 },
+  UPDATE_DEAL_STATUS:        { label: "Update deal status",        icon: TrendingUp },
 };
 
 const RISK_STYLE: Record<RiskLevel, { badge: string; label: string }> = {
-  LOW:    { badge: "bg-success/10 text-success",          label: "Low risk" },
-  MEDIUM: { badge: "bg-yellow-500/10 text-yellow-600",    label: "Medium risk" },
-  HIGH:   { badge: "bg-destructive/10 text-destructive",  label: "High risk" },
+  LOW:    { badge: "bg-success/10 text-success",         label: "Low risk" },
+  MEDIUM: { badge: "bg-yellow-500/10 text-yellow-600",   label: "Medium risk" },
+  HIGH:   { badge: "bg-destructive/10 text-destructive", label: "High risk" },
 };
 
 const STATUS_STYLE: Record<ActionPlanStatus, { icon: React.ElementType; className: string; label: string }> = {
-  DRAFT:      { icon: Clock,         className: "text-muted-foreground", label: "Draft" },
-  CONFIRMED:  { icon: Clock,         className: "text-blue-500",         label: "Confirmed" },
-  EXECUTING:  { icon: Loader2,       className: "text-yellow-500",       label: "Executing" },
-  SUCCESS:    { icon: CheckCircle2,  className: "text-success",          label: "Success" },
-  FAILED:     { icon: XCircle,       className: "text-destructive",      label: "Failed" },
-  CANCELLED:  { icon: XCircle,       className: "text-muted-foreground", label: "Cancelled" },
+  DRAFT:     { icon: Clock,        className: "text-muted-foreground", label: "Draft" },
+  CONFIRMED: { icon: Clock,        className: "text-blue-500",         label: "Confirmed" },
+  EXECUTING: { icon: Loader2,      className: "text-yellow-500",       label: "Executing" },
+  SUCCESS:   { icon: CheckCircle2, className: "text-success",          label: "Success" },
+  FAILED:    { icon: XCircle,      className: "text-destructive",      label: "Failed" },
+  CANCELLED: { icon: XCircle,      className: "text-muted-foreground", label: "Cancelled" },
 };
 
-// ── Phase type ────────────────────────────────────────────────────────────────
+const READ_EMAIL_SUGGESTIONS: Array<{ label: string; value: string }> = [
+  { label: "Unread inbox", value: "in:inbox is:unread" },
+  { label: "All inbox",    value: "in:inbox" },
+  { label: "Sent mail",    value: "in:sent" },
+  { label: "Last 7 days",  value: "newer_than:7d" },
+];
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type Phase =
   | { kind: "idle" }
@@ -84,7 +95,58 @@ type Phase =
   | { kind: "result"; plan: ActionPlanDetail }
   | { kind: "error"; message: string };
 
-// ── Payload summary ───────────────────────────────────────────────────────────
+// Mutable payload fields tracked per action index.
+type PayloadEdits = Partial<Record<number, Record<string, string>>>;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function initPayloadEdits(plan: ActionPlanDetail): PayloadEdits {
+  const edits: PayloadEdits = {};
+  for (const action of plan.actions) {
+    if (action.provider !== "GMAIL") continue;
+    const p = action.payload as Record<string, string | number>;
+    if (action.type === "DRAFT_EMAIL" || action.type === "SEND_EMAIL") {
+      edits[action.index] = {
+        to:      String(p.to      ?? ""),
+        subject: String(p.subject ?? ""),
+        body:    String(p.body    ?? ""),
+        cc:      String(p.cc      ?? ""),
+        bcc:     String(p.bcc     ?? ""),
+      };
+    } else if (action.type === "READ_EMAIL") {
+      edits[action.index] = {
+        query:      String(p.query      ?? "in:inbox is:unread"),
+        maxResults: String(p.maxResults ?? "5"),
+      };
+    }
+  }
+  return edits;
+}
+
+// Returns a human-readable error if the plan cannot be confirmed yet, null otherwise.
+function validatePayloadEdits(plan: ActionPlanDetail, edits: PayloadEdits): string | null {
+  for (const action of plan.actions) {
+    if (action.type === "SEND_EMAIL") {
+      const to = edits[action.index]?.to?.trim() ?? "";
+      if (!to) return "A recipient (To) is required before sending.";
+    }
+  }
+  return null;
+}
+
+// Returns the action-specific confirm button label for a plan.
+function confirmButtonLabel(plan: ActionPlanDetail): string {
+  if (plan.actions.length === 1) {
+    if (plan.actions[0].type === "DRAFT_EMAIL") return "Create Draft";
+    if (plan.actions[0].type === "SEND_EMAIL")  return "Send Email";
+    if (plan.actions[0].type === "READ_EMAIL")  return "Fetch Emails";
+  }
+  if (plan.riskLevel === "HIGH")   return "Review & Confirm";
+  if (plan.riskLevel === "MEDIUM") return "Confirm plan";
+  return "Confirm & execute";
+}
+
+// ── Payload summary (used in non-Gmail ActionCard) ────────────────────────────
 
 function payloadSummary(type: ActionType, payload: Record<string, unknown>): string {
   const p = payload as Record<string, string>;
@@ -114,9 +176,10 @@ function RiskBadge({ level }: { level: RiskLevel }) {
   );
 }
 
+// Read-only action card used for non-Gmail actions and in the result phase.
 function ActionCard({ action }: { action: ActionPlanDetail["actions"][number] }) {
   const meta = ACTION_META[action.type];
-  const Icon = meta.icon;
+  const Icon = meta?.icon;
   const summary = payloadSummary(action.type, action.payload);
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border p-3">
@@ -125,12 +188,241 @@ function ActionCard({ action }: { action: ActionPlanDetail["actions"][number] })
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-medium text-foreground text-sm">{meta.label}</span>
+          <span className="font-medium text-foreground text-sm">{meta?.label}</span>
           <RiskBadge level={action.riskLevel} />
         </div>
         {summary && <p className="text-xs text-muted-foreground mt-0.5 truncate">{summary}</p>}
         <p className="text-xs text-muted-foreground/60 mt-0.5">{action.provider.replace(/_/g, " ")}</p>
       </div>
+    </div>
+  );
+}
+
+// Editable fields for Gmail-specific payload review.
+function GmailPayloadEditor({
+  action,
+  edits,
+  onChange,
+}: {
+  action: ActionPlanDetail["actions"][number];
+  edits: Record<string, string>;
+  onChange: (field: string, value: string) => void;
+}) {
+  if (action.type === "DRAFT_EMAIL") {
+    return (
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">To</Label>
+          <Input
+            value={edits.to ?? ""}
+            onChange={e => onChange("to", e.target.value)}
+            placeholder="(fill in Gmail before sending)"
+            className="h-8 text-sm"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Subject</Label>
+          <Input
+            value={edits.subject ?? ""}
+            onChange={e => onChange("subject", e.target.value)}
+            placeholder="Subject"
+            className="h-8 text-sm"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Body</Label>
+          <Textarea
+            value={edits.body ?? ""}
+            onChange={e => onChange("body", e.target.value)}
+            placeholder="Email body…"
+            className="min-h-[80px] text-sm resize-none"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (action.type === "SEND_EMAIL") {
+    const toEmpty = !(edits.to?.trim());
+    return (
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">
+            To <span className="text-destructive">*</span>
+          </Label>
+          <Input
+            value={edits.to ?? ""}
+            onChange={e => onChange("to", e.target.value)}
+            placeholder="recipient@example.com"
+            className={`h-8 text-sm ${toEmpty ? "border-destructive focus-visible:ring-destructive" : ""}`}
+          />
+          {toEmpty && (
+            <p className="text-xs text-destructive">
+              Required — cannot send without a recipient.
+            </p>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">CC</Label>
+            <Input
+              value={edits.cc ?? ""}
+              onChange={e => onChange("cc", e.target.value)}
+              placeholder="Optional"
+              className="h-8 text-sm"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">BCC</Label>
+            <Input
+              value={edits.bcc ?? ""}
+              onChange={e => onChange("bcc", e.target.value)}
+              placeholder="Optional"
+              className="h-8 text-sm"
+            />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Subject</Label>
+          <Input
+            value={edits.subject ?? ""}
+            onChange={e => onChange("subject", e.target.value)}
+            placeholder="Subject"
+            className="h-8 text-sm"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Body</Label>
+          <Textarea
+            value={edits.body ?? ""}
+            onChange={e => onChange("body", e.target.value)}
+            placeholder="Email body…"
+            className="min-h-[80px] text-sm resize-none"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (action.type === "READ_EMAIL") {
+    return (
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Search query</Label>
+          <Input
+            value={edits.query ?? ""}
+            onChange={e => onChange("query", e.target.value)}
+            placeholder="in:inbox is:unread"
+            className="h-8 text-sm font-mono"
+          />
+          <div className="flex flex-wrap gap-1.5">
+            {READ_EMAIL_SUGGESTIONS.map(s => (
+              <button
+                key={s.value}
+                type="button"
+                onClick={() => onChange("query", s.value)}
+                className="rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Max results (1–20)</Label>
+          <Input
+            type="number"
+            min={1}
+            max={20}
+            value={edits.maxResults ?? "5"}
+            onChange={e => onChange("maxResults", e.target.value)}
+            className="h-8 text-sm w-24"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// Expanded card with editable fields for Gmail actions in the draft phase.
+function GmailActionCard({
+  action,
+  edits,
+  onFieldChange,
+}: {
+  action: ActionPlanDetail["actions"][number];
+  edits: Record<string, string>;
+  onFieldChange: (actionIndex: number, field: string, value: string) => void;
+}) {
+  const meta = ACTION_META[action.type];
+  const Icon = meta?.icon;
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted">
+            <Icon className="h-3.5 w-3.5 text-foreground" />
+          </div>
+          <span className="font-medium text-sm text-foreground">{meta?.label}</span>
+        </div>
+        <RiskBadge level={action.riskLevel} />
+      </div>
+      <GmailPayloadEditor
+        action={action}
+        edits={edits}
+        onChange={(field, value) => onFieldChange(action.index, field, value)}
+      />
+    </div>
+  );
+}
+
+// Post-success contextual links for Gmail actions.
+function GmailSuccessLinks({ plan }: { plan: ActionPlanDetail }) {
+  const gmailActions = plan.actions.filter(a => a.provider === "GMAIL");
+  if (gmailActions.length === 0) return null;
+
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      {gmailActions.map(action => {
+        if (action.type === "DRAFT_EMAIL") {
+          return (
+            <a
+              key={action.index}
+              href="https://mail.google.com/mail/#drafts"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open Drafts in Gmail
+            </a>
+          );
+        }
+        if (action.type === "SEND_EMAIL") {
+          return (
+            <a
+              key={action.index}
+              href="https://mail.google.com/mail/#sent"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              View Sent Mail in Gmail
+            </a>
+          );
+        }
+        if (action.type === "READ_EMAIL") {
+          return (
+            <p key={action.index} className="text-xs text-muted-foreground">
+              Emails were fetched and stored. A results panel is coming in a future update.
+            </p>
+          );
+        }
+        return null;
+      })}
     </div>
   );
 }
@@ -169,7 +461,6 @@ function ExplainSection({ explain }: { explain: ActionPlanDetail["explain"] }) {
               </div>
             </div>
           )}
-
           {explain.defaults.length > 0 && (
             <div>
               <p className="font-medium text-foreground mb-2">Defaults applied</p>
@@ -183,7 +474,6 @@ function ExplainSection({ explain }: { explain: ActionPlanDetail["explain"] }) {
               </ul>
             </div>
           )}
-
           {explain.willNot.length > 0 && (
             <div>
               <p className="font-medium text-foreground mb-2">Will NOT do</p>
@@ -230,15 +520,13 @@ export default function ActionPlansPage() {
   const { user, initialized } = useAuth();
 
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  const [payloadEdits, setPayloadEdits] = useState<PayloadEdits>({});
   const [instruction, setInstruction] = useState("");
   const [history, setHistory] = useState<ActionPlanSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
 
-  // HIGH risk confirm dialog
   const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; plan: ActionPlanDetail | null }>({ open: false, plan: null });
   const [confirmText, setConfirmText] = useState("");
-
-  // MEDIUM risk confirm dialog
   const [mediumDialog, setMediumDialog] = useState<{ open: boolean; plan: ActionPlanDetail | null }>({ open: false, plan: null });
 
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -263,7 +551,6 @@ export default function ActionPlansPage() {
     if (initialized && user) loadHistory();
   }, [initialized, user, loadHistory]);
 
-  // Polling loop when executing
   useEffect(() => {
     if (phase.kind !== "executing") return;
     const planId = phase.planId;
@@ -290,6 +577,12 @@ export default function ActionPlansPage() {
 
   if (!initialized || !user) return null;
 
+  // ── Derived draft-phase values (safe to compute unconditionally) ──
+
+  const draftPlan = phase.kind === "draft" ? phase.plan : null;
+  const draftValidationError = draftPlan ? validatePayloadEdits(draftPlan, payloadEdits) : null;
+  const draftHasSendEmail = draftPlan ? draftPlan.actions.some(a => a.type === "SEND_EMAIL") : false;
+
   // ── Handlers ──
 
   async function handlePreview() {
@@ -298,9 +591,17 @@ export default function ActionPlansPage() {
     try {
       const plan = await actionPlansApi.preview(instruction.trim());
       setPhase({ kind: "draft", plan });
+      setPayloadEdits(initPayloadEdits(plan));
     } catch (err: unknown) {
       setPhase({ kind: "error", message: err instanceof Error ? err.message : "Preview failed." });
     }
+  }
+
+  function setPayloadField(actionIndex: number, field: string, value: string) {
+    setPayloadEdits(prev => ({
+      ...prev,
+      [actionIndex]: { ...(prev[actionIndex] ?? {}), [field]: value },
+    }));
   }
 
   async function executeConfirm(plan: ActionPlanDetail) {
@@ -313,6 +614,7 @@ export default function ActionPlansPage() {
   }
 
   function handleConfirm(plan: ActionPlanDetail) {
+    if (validatePayloadEdits(plan, payloadEdits)) return; // inline error already visible
     if (plan.riskLevel === "HIGH") {
       setConfirmText("");
       setConfirmDialog({ open: true, plan });
@@ -326,6 +628,7 @@ export default function ActionPlansPage() {
   function reset() {
     setInstruction("");
     setPhase({ kind: "idle" });
+    setPayloadEdits({});
   }
 
   // ── Render ──
@@ -381,8 +684,7 @@ export default function ActionPlansPage() {
           </CardContent>
         </Card>
 
-        {/* Phase-dependent middle section */}
-
+        {/* Draft phase */}
         {phase.kind === "draft" && (
           <Card>
             <CardHeader>
@@ -392,30 +694,46 @@ export default function ActionPlansPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Actions */}
-              <div className="space-y-2">
-                {phase.plan.actions.map((action) => (
-                  <ActionCard key={action.index} action={action} />
-                ))}
+              <div className="space-y-3">
+                {phase.plan.actions.map((action) =>
+                  action.provider === "GMAIL" ? (
+                    <GmailActionCard
+                      key={action.index}
+                      action={action}
+                      edits={payloadEdits[action.index] ?? {}}
+                      onFieldChange={setPayloadField}
+                    />
+                  ) : (
+                    <ActionCard key={action.index} action={action} />
+                  )
+                )}
               </div>
 
-              {/* Explain */}
               <ExplainSection explain={phase.plan.explain} />
 
-              {/* Risk warning for HIGH */}
-              {phase.plan.riskLevel === "HIGH" && (
+              {/* SEND_EMAIL: specific irreversible-action warning */}
+              {draftHasSendEmail && (
+                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>This will send the email immediately and cannot be undone.</span>
+                </div>
+              )}
+
+              {/* Non-email HIGH risk warning */}
+              {!draftHasSendEmail && phase.plan.riskLevel === "HIGH" && (
                 <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                   <span>This plan contains high-risk actions. You will need to type CONFIRM to proceed.</span>
                 </div>
               )}
 
-              {/* Buttons */}
               <div className="flex gap-3 pt-2">
-                <Button onClick={() => handleConfirm(phase.plan)} className="flex-1">
-                  {phase.plan.riskLevel === "HIGH" ? "Review & Confirm" :
-                   phase.plan.riskLevel === "MEDIUM" ? "Confirm plan" :
-                   "Confirm & execute"}
+                <Button
+                  onClick={() => handleConfirm(phase.plan)}
+                  disabled={!!draftValidationError}
+                  className="flex-1"
+                >
+                  {confirmButtonLabel(phase.plan)}
                 </Button>
                 <Button variant="outline" onClick={reset}>Cancel</Button>
               </div>
@@ -423,6 +741,7 @@ export default function ActionPlansPage() {
           </Card>
         )}
 
+        {/* Executing phase */}
         {phase.kind === "executing" && (
           <Card>
             <CardContent className="pt-6">
@@ -442,6 +761,7 @@ export default function ActionPlansPage() {
           </Card>
         )}
 
+        {/* Result phase */}
         {phase.kind === "result" && (
           <Card>
             <CardContent className="pt-6 space-y-4">
@@ -449,8 +769,13 @@ export default function ActionPlansPage() {
                 {phase.plan.status === "SUCCESS" ? (
                   <>
                     <CheckCircle2 className="h-12 w-12 text-success" />
-                    <p className="text-lg font-semibold text-foreground">Plan executed successfully</p>
+                    <p className="text-lg font-semibold text-foreground">
+                      {phase.plan.actions.length === 1 && phase.plan.actions[0].type === "READ_EMAIL"
+                        ? "Emails fetched successfully"
+                        : "Plan executed successfully"}
+                    </p>
                     <p className="text-sm text-muted-foreground">All actions completed.</p>
+                    <GmailSuccessLinks plan={phase.plan} />
                   </>
                 ) : (
                   <>
@@ -463,6 +788,19 @@ export default function ActionPlansPage() {
                         ? "The plan was cancelled before completion."
                         : "One or more actions could not be completed."}
                     </p>
+                    {phase.plan.status === "FAILED" && phase.plan.actions.some(a => a.provider === "GMAIL") && (
+                      <p className="text-xs text-muted-foreground">
+                        If Gmail is not connected,{" "}
+                        <button
+                          type="button"
+                          onClick={() => router.push("/dashboard/settings")}
+                          className="underline hover:no-underline"
+                        >
+                          connect it in Settings
+                        </button>{" "}
+                        and try again.
+                      </p>
+                    )}
                   </>
                 )}
               </div>
@@ -479,6 +817,7 @@ export default function ActionPlansPage() {
           </Card>
         )}
 
+        {/* Error phase */}
         {phase.kind === "error" && (
           <Card className="border-destructive/30">
             <CardContent className="pt-6">
@@ -541,7 +880,7 @@ export default function ActionPlansPage() {
                 if (plan) executeConfirm(plan);
               }}
             >
-              Confirm
+              {mediumDialog.plan ? confirmButtonLabel(mediumDialog.plan) : "Confirm"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -562,7 +901,16 @@ export default function ActionPlansPage() {
               High-risk confirmation required
             </DialogTitle>
             <DialogDescription>
-              Type <strong>CONFIRM</strong> below to execute this high-risk plan.
+              {confirmDialog.plan?.actions.some(a => a.type === "SEND_EMAIL") ? (
+                <>
+                  This will <strong>immediately send the email</strong>. Type{" "}
+                  <strong>CONFIRM</strong> to proceed.
+                </>
+              ) : (
+                <>
+                  Type <strong>CONFIRM</strong> below to execute this high-risk plan.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <Input
@@ -590,7 +938,7 @@ export default function ActionPlansPage() {
                 if (plan) executeConfirm(plan);
               }}
             >
-              Execute plan
+              {confirmDialog.plan ? confirmButtonLabel(confirmDialog.plan) : "Execute plan"}
             </Button>
           </DialogFooter>
         </DialogContent>

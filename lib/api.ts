@@ -272,6 +272,7 @@ export type ActionType =
   | "RESCHEDULE_CALENDAR_EVENT"
   | "DRAFT_EMAIL"
   | "SEND_EMAIL"
+  | "READ_EMAIL"
   | "TRIGGER_WORKFLOW"
   | "LOG_CRM_ACTIVITY"
   | "UPDATE_DEAL_STATUS";
@@ -360,11 +361,18 @@ export interface Integration {
   lastError: string | null;
 }
 
+export interface OAuthInitiateResponse {
+  authorizationUrl: string;
+}
+
 // ── Integration endpoints ────────────────────────────────────────────────────
 
 export const integrationsApi = {
   list: () =>
     apiFetch<Integration[]>("/api/v1/integrations"),
+
+  initiateOAuth: (provider: IntegrationProvider) =>
+    apiFetch<OAuthInitiateResponse>(`/api/v1/integrations/oauth/initiate/${provider}`),
 
   connect: (
     provider: IntegrationProvider,
