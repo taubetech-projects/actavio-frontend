@@ -163,7 +163,7 @@ function ExplainSection({ explain }: { explain: ActionPlanDetail["explain"] }) {
               <div className="flex flex-wrap gap-2">
                 {explain.triggers.map((t, i) => (
                   <span key={i} className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-                    {t.phrase} → {t.maps_to.replace(/_/g, " ")}
+                    {t.phrase} → {t.maps_to?.replace(/_/g, " ")}
                   </span>
                 ))}
               </div>

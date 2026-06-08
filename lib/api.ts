@@ -168,6 +168,39 @@ export const tenantsApi = {
     }),
 };
 
+// ── Member types ─────────────────────────────────────────────────────────────
+
+export type MemberStatus = "ACTIVE" | "SUSPENDED" | "PENDING";
+
+export interface MemberResponse {
+  userId: string;
+  name: string;
+  email: string;
+  role: TenantRole;
+  status: MemberStatus;
+  emailVerified: boolean;
+  joinedAt: string;
+  lastLoginAt: string | null;
+}
+
+// ── Member endpoints ──────────────────────────────────────────────────────────
+
+export const membersApi = {
+  list: () =>
+    apiFetch<MemberResponse[]>("/api/v1/tenants/me/members"),
+
+  update: (userId: string, body: { role?: TenantRole; status?: "ACTIVE" | "SUSPENDED" }) =>
+    apiFetch<MemberResponse>(`/api/v1/tenants/me/members/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  remove: (userId: string) =>
+    apiFetch<null>(`/api/v1/tenants/me/members/${userId}`, {
+      method: "DELETE",
+    }),
+};
+
 // ── Invite types ─────────────────────────────────────────────────────────────
 
 export interface InviteResponse {

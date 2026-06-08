@@ -215,6 +215,7 @@ export default function SettingsPage() {
   const [savingUserOverride, setSavingUserOverride] = useState(false);
   const [savingTenantDefault, setSavingTenantDefault] = useState(false);
   const [engineSaved, setEngineSaved] = useState<"user" | "tenant" | null>(null);
+  const [engineSaveError, setEngineSaveError] = useState<string | null>(null);
 
   // Integrations state
   const [integrations, setIntegrations] = useState<
@@ -274,12 +275,15 @@ export default function SettingsPage() {
   }, []);
 
   async function handleSaveUserOverride() {
+    setEngineSaveError(null);
     setSavingUserOverride(true);
     try {
       const data = await settingsApi.setUserOverride(userOverride);
       setEngineSettings(data);
       setEngineSaved("user");
       setTimeout(() => setEngineSaved(null), 2000);
+    } catch (err: unknown) {
+      setEngineSaveError(err instanceof Error ? err.message : "Failed to save preference.");
     } finally {
       setSavingUserOverride(false);
     }
@@ -287,12 +291,15 @@ export default function SettingsPage() {
 
   async function handleSaveTenantDefault() {
     if (!tenantDefault) return;
+    setEngineSaveError(null);
     setSavingTenantDefault(true);
     try {
       const data = await settingsApi.setTenantDefault(tenantDefault);
       setEngineSettings(data);
       setEngineSaved("tenant");
       setTimeout(() => setEngineSaved(null), 2000);
+    } catch (err: unknown) {
+      setEngineSaveError(err instanceof Error ? err.message : "Failed to save org default.");
     } finally {
       setSavingTenantDefault(false);
     }
@@ -479,6 +486,11 @@ export default function SettingsPage() {
               </Card>
             ) : (
               <div className="space-y-6">
+                {engineSaveError && (
+                  <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+                    {engineSaveError}
+                  </div>
+                )}
                 {/* Effective engine */}
                 <Card>
                   <CardHeader>
