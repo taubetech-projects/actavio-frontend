@@ -14,6 +14,11 @@ const PROVIDER_LABELS: Record<string, string> = {
   NOTION: "Notion",
   OUTLOOK_CALENDAR: "Outlook Calendar",
   OUTLOOK_MAIL: "Outlook Mail",
+  FACEBOOK: "Facebook",
+  INSTAGRAM: "Instagram",
+  TWITTER: "Twitter",
+  LINKEDIN: "LinkedIn",
+  TIKTOK: "TikTok",
 };
 
 // Maps backend error codes to user-facing copy.

@@ -471,6 +471,11 @@ export type IntegrationProvider =
   | "HUBSPOT"
   | "SLACK"
   | "NOTION"
+  | "FACEBOOK"
+  | "INSTAGRAM"
+  | "TWITTER"
+  | "LINKEDIN"
+  | "TIKTOK"
   | "INTERNAL_TASKS";
 
 export type IntegrationStatus = "DISCONNECTED" | "CONNECTED" | "ERROR";

@@ -78,6 +78,11 @@ const PROVIDERS: IntegrationProvider[] = [
   "HUBSPOT",
   "SLACK",
   "NOTION",
+  "FACEBOOK",
+  "INSTAGRAM",
+  "TWITTER",
+  "LINKEDIN",
+  "TIKTOK",
   "INTERNAL_TASKS",
 ];
 

@@ -22,6 +22,7 @@ import {
   Unplug,
   Cpu,
 } from "lucide-react";
+import { Facebook, Instagram, Twitter, LinkedIn, TikTok, Gmail, GoogleCalendar, Outlook, Hubspot, Slack, Notion } from "@/components/social-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -60,38 +61,63 @@ const PROVIDER_META: Record<
 > = {
   GMAIL: {
     name: "Gmail",
-    icon: Mail,
+    icon: Gmail,
     description: "Send and draft emails on your behalf",
   },
   GOOGLE_CALENDAR: {
     name: "Google Calendar",
-    icon: Calendar,
+    icon: GoogleCalendar,
     description: "Create and reschedule calendar events",
   },
   OUTLOOK_MAIL: {
     name: "Outlook Mail",
-    icon: Mail,
+    icon: Outlook,
     description: "Send and draft emails via Outlook",
   },
   OUTLOOK_CALENDAR: {
     name: "Outlook Calendar",
-    icon: Calendar,
+    icon: Outlook,
     description: "Create and reschedule Outlook calendar events",
   },
   SLACK: {
     name: "Slack",
-    icon: MessageSquare,
+    icon: Slack,
     description: "Send messages and trigger workflows",
   },
   HUBSPOT: {
     name: "HubSpot",
-    icon: BarChart2,
+    icon: Hubspot,
     description: "Log CRM activities and update deal status",
   },
   NOTION: {
     name: "Notion",
-    icon: BookOpen,
+    icon: Notion,
     description: "Create and update Notion pages",
+  },
+  FACEBOOK: {
+    name: "Facebook",
+    icon: Facebook,
+    description: "Create and update Facebook pages",
+  },
+  INSTAGRAM: {
+    name: "Instagram",
+    icon: Instagram,
+    description: "Create and update Instagram pages",
+  },
+  TWITTER: {
+    name: "Twitter",
+    icon: Twitter,
+    description: "Create and update Twitter pages",
+  },
+  LINKEDIN: {
+    name: "LinkedIn",
+    icon: LinkedIn,
+    description: "Create and update LinkedIn pages",
+  },
+  TIKTOK: {
+    name: "TikTok",
+    icon: TikTok,
+    description: "Create and update TikTok pages",
   },
   INTERNAL_TASKS: {
     name: "Internal Tasks",
@@ -111,6 +137,11 @@ const OAUTH_PROVIDERS = new Set<IntegrationProvider>([
   "NOTION",
   "OUTLOOK_CALENDAR",
   "OUTLOOK_MAIL",
+  "FACEBOOK",
+  "INSTAGRAM",
+  "TWITTER",
+  "LINKEDIN",
+  "TIKTOK",
 ]);
 
 // ── Status badge ─────────────────────────────────────────────────────────────
