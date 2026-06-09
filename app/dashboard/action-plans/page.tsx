@@ -1062,7 +1062,7 @@ export default function ActionPlansPage() {
   const loadHistory = useCallback(async () => {
     try {
       const data = await actionPlansApi.list();
-      setHistory(data);
+      setHistory(data.content);
     } catch {
       // non-fatal
     } finally {

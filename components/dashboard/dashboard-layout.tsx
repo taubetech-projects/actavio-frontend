@@ -16,6 +16,7 @@ import {
   ChevronDown,
   Shield,
   Sparkles,
+  ClipboardList,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +33,7 @@ const userNavItems = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "AI Assistant", href: "/dashboard/action-plans", icon: Sparkles },
   { name: "My Tasks", href: "/dashboard/tasks", icon: ListTodo },
+  { name: "My Action Plans", href: "/dashboard/my-action-plans", icon: ClipboardList },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
 

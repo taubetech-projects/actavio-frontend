@@ -261,6 +261,18 @@ export interface UpdateTaskInput {
 
 // ── Task endpoints ───────────────────────────────────────────────────────────
 
+// ── Pagination ───────────────────────────────────────────────────────────────
+
+export interface SpringPage<T> {
+  content: T[];
+  totalElements: number;
+  totalPages: number;
+  number: number;
+  size: number;
+  first: boolean;
+  last: boolean;
+}
+
 // ── Action plan types ────────────────────────────────────────────────────────
 
 export type ActionPlanStatus =
@@ -372,6 +384,25 @@ export interface ActionPayloadResponse {
   payload: Record<string, unknown>;
 }
 
+export interface ActionPlanActionDto {
+  id: string;
+  actionPlanId: string;
+  actionIndex: number;
+  actionType: ActionType;
+  provider: IntegrationProvider;
+  payload: Record<string, unknown>;
+  riskLevel: RiskLevel;
+  engineOverride: ExecutionEngineType | null;
+}
+
+export interface ActionRequest {
+  actionType: ActionType;
+  provider: IntegrationProvider;
+  payload: Record<string, unknown>;
+  riskLevel: RiskLevel;
+  engineOverride?: ExecutionEngineType;
+}
+
 // ── Action plan endpoints ─────────────────────────────────────────────────────
 
 export const actionPlansApi = {
@@ -392,11 +423,42 @@ export const actionPlansApi = {
       { method: "PATCH", body: JSON.stringify({ payload }) }
     ),
 
-  list: () =>
-    apiFetch<ActionPlanSummary[]>("/api/v1/action-plans"),
+  list: (page = 0, size = 20) =>
+    apiFetch<SpringPage<ActionPlanSummary>>(
+      `/api/v1/action-plans?page=${page}&size=${size}&sort=createdAt,desc`
+    ),
 
   get: (id: string) =>
     apiFetch<ActionPlanDetail>(`/api/v1/action-plans/${id}`),
+};
+
+// ── Plan actions endpoints ────────────────────────────────────────────────────
+
+export const planActionsApi = {
+  list: (planId: string, page = 0, size = 50) =>
+    apiFetch<SpringPage<ActionPlanActionDto>>(
+      `/api/v1/action-plans/${planId}/actions?page=${page}&size=${size}&sort=actionIndex,asc`
+    ),
+
+  get: (planId: string, actionIndex: number) =>
+    apiFetch<ActionPlanActionDto>(`/api/v1/action-plans/${planId}/actions/${actionIndex}`),
+
+  create: (planId: string, body: ActionRequest) =>
+    apiFetch<ActionPlanActionDto>(`/api/v1/action-plans/${planId}/actions`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  update: (planId: string, actionIndex: number, body: ActionRequest) =>
+    apiFetch<ActionPlanActionDto>(`/api/v1/action-plans/${planId}/actions/${actionIndex}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  delete: (planId: string, actionIndex: number) =>
+    apiFetch<null>(`/api/v1/action-plans/${planId}/actions/${actionIndex}`, {
+      method: "DELETE",
+    }),
 };
 
 // ── Integration types ────────────────────────────────────────────────────────
