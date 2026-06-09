@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Sparkles,
@@ -51,6 +51,7 @@ import {
   type ReadEmailRaw,
   type CreateCalendarEventRaw,
   type RescheduleCalendarEventRaw,
+  type PayloadFieldError,
 } from "@/lib/api";
 
 // ── Metadata maps ─────────────────────────────────────────────────────────────
@@ -100,11 +101,15 @@ type Phase =
   | { kind: "result"; plan: ActionPlanDetail; result: ConfirmResponse }
   | { kind: "error"; message: string };
 
-// Mutable payload fields tracked per action index.
-type PayloadEdits = Partial<Record<number, Record<string, string>>>;
+interface ActionEditState {
+  payload: Record<string, string>;
+  savedPayload: Record<string, string>;
+  fieldErrors: Record<string, string>;
+  savingFields: Record<string, boolean>;
+  showSaved: boolean;
+}
 
-// Field-level validation errors per action index.
-type ValidationErrors = Partial<Record<number, Record<string, string>>>;
+type AllActionEditStates = Record<number, ActionEditState>;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -128,14 +133,15 @@ function toDatetimeLocal(iso: string): string {
   }
 }
 
-function initPayloadEdits(plan: ActionPlanDetail): PayloadEdits {
-  const edits: PayloadEdits = {};
+function initActionStates(plan: ActionPlanDetail): AllActionEditStates {
+  const states: AllActionEditStates = {};
   for (const action of plan.actions) {
     const p = action.payload as Record<string, string | number>;
+    let payload: Record<string, string> = {};
 
     if (action.provider === "GMAIL") {
       if (action.type === "DRAFT_EMAIL" || action.type === "SEND_EMAIL") {
-        edits[action.index] = {
+        payload = {
           to:      String(p.to      ?? ""),
           subject: String(p.subject ?? ""),
           body:    String(p.body    ?? ""),
@@ -143,16 +149,14 @@ function initPayloadEdits(plan: ActionPlanDetail): PayloadEdits {
           bcc:     String(p.bcc     ?? ""),
         };
       } else if (action.type === "READ_EMAIL") {
-        edits[action.index] = {
+        payload = {
           query:      String(p.query      ?? "in:inbox is:unread"),
           maxResults: String(p.maxResults ?? "5"),
         };
       }
-    }
-
-    if (action.provider === "GOOGLE_CALENDAR") {
+    } else if (action.provider === "GOOGLE_CALENDAR") {
       if (action.type === "CREATE_CALENDAR_EVENT") {
-        edits[action.index] = {
+        payload = {
           title:         String(p.title         ?? ""),
           startDateTime: toDatetimeLocal(String(p.startDateTime ?? "")),
           endDateTime:   toDatetimeLocal(String(p.endDateTime   ?? "")),
@@ -160,73 +164,76 @@ function initPayloadEdits(plan: ActionPlanDetail): PayloadEdits {
           location:      String(p.location      ?? ""),
         };
       } else if (action.type === "RESCHEDULE_CALENDAR_EVENT") {
-        edits[action.index] = {
+        payload = {
           searchQuery:           String(p.searchQuery           ?? ""),
           originalStartDateTime: toDatetimeLocal(String(p.originalStartDateTime ?? p.startDateTime ?? "")),
           startDateTime:         toDatetimeLocal(String(p.startDateTime         ?? "")),
           endDateTime:           toDatetimeLocal(String(p.endDateTime           ?? "")),
         };
       }
+    } else if (action.type === "CREATE_TASK") {
+      payload = {
+        title:    String(p.title    ?? ""),
+        priority: String(p.priority ?? ""),
+        dueDate:  String(p.dueDate  ?? ""),
+        notes:    String(p.notes    ?? ""),
+      };
+    } else if (action.type === "UPDATE_TASK") {
+      payload = {
+        title:    String(p.title    ?? ""),
+        status:   String(p.status   ?? ""),
+        priority: String(p.priority ?? ""),
+      };
     }
+
+    states[action.index] = {
+      payload,
+      savedPayload: { ...payload },
+      fieldErrors: {},
+      savingFields: {},
+      showSaved: false,
+    };
   }
-  return edits;
+  return states;
 }
 
-// Per-action field-level validation. Returns an empty object when the plan is ready to confirm.
-function validatePayloadEdits(plan: ActionPlanDetail, edits: PayloadEdits): ValidationErrors {
-  const result: ValidationErrors = {};
+// Validates the server-saved payload against required field rules (used for the confirm gate).
+function getRequiredFieldErrors(actionType: ActionType, saved: Record<string, string>): Record<string, string> {
+  const e: Record<string, string> = {};
 
-  for (const action of plan.actions) {
-    const f = edits[action.index] ?? {};
-    const e: Record<string, string> = {};
-
-    if (action.type === "SEND_EMAIL") {
-      const to = f.to?.trim() ?? "";
-      if (!to) {
-        e.to = "Recipient is required.";
-      } else if (!EMAIL_REGEX.test(to)) {
-        e.to = "Enter a valid email address.";
-      }
-    }
-
-    if (action.type === "CREATE_CALENDAR_EVENT") {
-      if (!f.startDateTime?.trim()) {
-        e.startDateTime = "Start time is required.";
-      } else if (!isValidDatetime(f.startDateTime)) {
-        e.startDateTime = "Enter a valid date and time.";
-      }
-      if (!f.endDateTime?.trim()) {
-        e.endDateTime = "End time is required.";
-      } else if (!isValidDatetime(f.endDateTime)) {
-        e.endDateTime = "Enter a valid date and time.";
-      }
-    }
-
-    if (action.type === "RESCHEDULE_CALENDAR_EVENT") {
-      if (!f.searchQuery?.trim()) {
-        e.searchQuery = "Event description is required to locate the event.";
-      }
-      if (!f.startDateTime?.trim()) {
-        e.startDateTime = "New start time is required.";
-      } else if (!isValidDatetime(f.startDateTime)) {
-        e.startDateTime = "Enter a valid date and time.";
-      }
-      if (!f.endDateTime?.trim()) {
-        e.endDateTime = "New end time is required.";
-      } else if (!isValidDatetime(f.endDateTime)) {
-        e.endDateTime = "Enter a valid date and time.";
-      }
-    }
-
-    if (Object.keys(e).length > 0) result[action.index] = e;
+  if (actionType === "SEND_EMAIL") {
+    const to = saved.to?.trim() ?? "";
+    if (!to) e.to = "Recipient is required.";
+    else if (!EMAIL_REGEX.test(to)) e.to = "Enter a valid email address.";
   }
 
-  return result;
+  if (actionType === "CREATE_CALENDAR_EVENT") {
+    if (!saved.startDateTime?.trim()) e.startDateTime = "Start time is required.";
+    else if (!isValidDatetime(saved.startDateTime)) e.startDateTime = "Enter a valid date and time.";
+    if (!saved.endDateTime?.trim()) e.endDateTime = "End time is required.";
+    else if (!isValidDatetime(saved.endDateTime)) e.endDateTime = "Enter a valid date and time.";
+  }
+
+  if (actionType === "RESCHEDULE_CALENDAR_EVENT") {
+    if (!saved.searchQuery?.trim()) e.searchQuery = "Event description is required.";
+    if (!saved.startDateTime?.trim()) e.startDateTime = "New start time is required.";
+    else if (!isValidDatetime(saved.startDateTime)) e.startDateTime = "Enter a valid date and time.";
+    if (!saved.endDateTime?.trim()) e.endDateTime = "New end time is required.";
+    else if (!isValidDatetime(saved.endDateTime)) e.endDateTime = "Enter a valid date and time.";
+  }
+
+  if (actionType === "CREATE_TASK" || actionType === "UPDATE_TASK") {
+    if (!saved.title?.trim()) e.title = "Title is required.";
+  }
+
+  return e;
 }
 
 function confirmButtonLabel(plan: ActionPlanDetail): string {
   if (plan.actions.length === 1) {
     switch (plan.actions[0].type) {
+      case "CREATE_TASK":               return "Create Task";
+      case "UPDATE_TASK":               return "Update Task";
       case "DRAFT_EMAIL":               return "Create Draft";
       case "SEND_EMAIL":                return "Send Email";
       case "READ_EMAIL":                return "Fetch Emails";
@@ -296,39 +303,59 @@ function GmailPayloadEditor({
   action,
   edits,
   errors,
+  savingFields,
+  locked,
   onChange,
+  onBlur,
 }: {
   action: ActionPlanDetail["actions"][number];
   edits: Record<string, string>;
   errors: Record<string, string>;
+  savingFields: Record<string, boolean>;
+  locked: boolean;
   onChange: (field: string, value: string) => void;
+  onBlur: (field: string) => void;
 }) {
+  const fieldLabel = (name: string, label: string, required?: boolean) => (
+    <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
+      {label}
+      {required && <span className="text-destructive">*</span>}
+      {savingFields[name] && <Loader2 className="h-3 w-3 animate-spin" />}
+    </Label>
+  );
+
   if (action.type === "DRAFT_EMAIL") {
     return (
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">To</Label>
+          {fieldLabel("to", "To")}
           <Input
             value={edits.to ?? ""}
             onChange={e => onChange("to", e.target.value)}
+            onBlur={() => onBlur("to")}
+            disabled={locked}
             placeholder="(fill in Gmail before sending)"
             className="h-8 text-sm"
           />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Subject</Label>
+          {fieldLabel("subject", "Subject")}
           <Input
             value={edits.subject ?? ""}
             onChange={e => onChange("subject", e.target.value)}
+            onBlur={() => onBlur("subject")}
+            disabled={locked}
             placeholder="Subject"
             className="h-8 text-sm"
           />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Body</Label>
+          {fieldLabel("body", "Body")}
           <Textarea
             value={edits.body ?? ""}
             onChange={e => onChange("body", e.target.value)}
+            onBlur={() => onBlur("body")}
+            disabled={locked}
             placeholder="Email body…"
             className="min-h-[80px] text-sm resize-none"
           />
@@ -341,12 +368,12 @@ function GmailPayloadEditor({
     return (
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">
-            To <span className="text-destructive">*</span>
-          </Label>
+          {fieldLabel("to", "To", true)}
           <Input
             value={edits.to ?? ""}
             onChange={e => onChange("to", e.target.value)}
+            onBlur={() => onBlur("to")}
+            disabled={locked}
             placeholder="recipient@example.com"
             className={`h-8 text-sm ${errors.to ? "border-destructive focus-visible:ring-destructive" : ""}`}
           />
@@ -354,21 +381,21 @@ function GmailPayloadEditor({
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">CC</Label>
-            <Input value={edits.cc ?? ""} onChange={e => onChange("cc", e.target.value)} placeholder="Optional" className="h-8 text-sm" />
+            {fieldLabel("cc", "CC")}
+            <Input value={edits.cc ?? ""} onChange={e => onChange("cc", e.target.value)} onBlur={() => onBlur("cc")} disabled={locked} placeholder="Optional" className="h-8 text-sm" />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">BCC</Label>
-            <Input value={edits.bcc ?? ""} onChange={e => onChange("bcc", e.target.value)} placeholder="Optional" className="h-8 text-sm" />
+            {fieldLabel("bcc", "BCC")}
+            <Input value={edits.bcc ?? ""} onChange={e => onChange("bcc", e.target.value)} onBlur={() => onBlur("bcc")} disabled={locked} placeholder="Optional" className="h-8 text-sm" />
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Subject</Label>
-          <Input value={edits.subject ?? ""} onChange={e => onChange("subject", e.target.value)} placeholder="Subject" className="h-8 text-sm" />
+          {fieldLabel("subject", "Subject")}
+          <Input value={edits.subject ?? ""} onChange={e => onChange("subject", e.target.value)} onBlur={() => onBlur("subject")} disabled={locked} placeholder="Subject" className="h-8 text-sm" />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Body</Label>
-          <Textarea value={edits.body ?? ""} onChange={e => onChange("body", e.target.value)} placeholder="Email body…" className="min-h-[80px] text-sm resize-none" />
+          {fieldLabel("body", "Body")}
+          <Textarea value={edits.body ?? ""} onChange={e => onChange("body", e.target.value)} onBlur={() => onBlur("body")} disabled={locked} placeholder="Email body…" className="min-h-[80px] text-sm resize-none" />
         </div>
       </div>
     );
@@ -378,10 +405,12 @@ function GmailPayloadEditor({
     return (
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Search query</Label>
+          {fieldLabel("query", "Search query")}
           <Input
             value={edits.query ?? ""}
             onChange={e => onChange("query", e.target.value)}
+            onBlur={() => onBlur("query")}
+            disabled={locked}
             placeholder="in:inbox is:unread"
             className="h-8 text-sm font-mono"
           />
@@ -391,7 +420,8 @@ function GmailPayloadEditor({
                 key={s.value}
                 type="button"
                 onClick={() => onChange("query", s.value)}
-                className="rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                disabled={locked}
+                className="rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50"
               >
                 {s.label}
               </button>
@@ -399,13 +429,15 @@ function GmailPayloadEditor({
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Max results (1–20)</Label>
+          {fieldLabel("maxResults", "Max results (1–20)")}
           <Input
             type="number"
             min={1}
             max={20}
             value={edits.maxResults ?? "5"}
             onChange={e => onChange("maxResults", e.target.value)}
+            onBlur={() => onBlur("maxResults")}
+            disabled={locked}
             className="h-8 text-sm w-24"
           />
         </div>
@@ -421,53 +453,67 @@ function CalendarPayloadEditor({
   action,
   edits,
   errors,
+  savingFields,
+  locked,
   onChange,
+  onBlur,
 }: {
   action: ActionPlanDetail["actions"][number];
   edits: Record<string, string>;
   errors: Record<string, string>;
+  savingFields: Record<string, boolean>;
+  locked: boolean;
   onChange: (field: string, value: string) => void;
+  onBlur: (field: string) => void;
 }) {
+  const fieldLabel = (name: string, label: string, required?: boolean) => (
+    <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
+      {label}
+      {required && <span className="text-destructive">*</span>}
+      {savingFields[name] && <Loader2 className="h-3 w-3 animate-spin" />}
+    </Label>
+  );
+
   if (action.type === "CREATE_CALENDAR_EVENT") {
     return (
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Title</Label>
-          <Input value={edits.title ?? ""} onChange={e => onChange("title", e.target.value)} placeholder="Meeting title" className="h-8 text-sm" />
+          {fieldLabel("title", "Title")}
+          <Input value={edits.title ?? ""} onChange={e => onChange("title", e.target.value)} onBlur={() => onBlur("title")} disabled={locked} placeholder="Meeting title" className="h-8 text-sm" />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">
-              Start <span className="text-destructive">*</span>
-            </Label>
+            {fieldLabel("startDateTime", "Start", true)}
             <Input
               type="datetime-local"
               value={edits.startDateTime ?? ""}
               onChange={e => onChange("startDateTime", e.target.value)}
+              onBlur={() => onBlur("startDateTime")}
+              disabled={locked}
               className={`h-8 text-sm ${errors.startDateTime ? "border-destructive" : ""}`}
             />
             {errors.startDateTime && <p className="text-xs text-destructive">{errors.startDateTime}</p>}
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">
-              End <span className="text-destructive">*</span>
-            </Label>
+            {fieldLabel("endDateTime", "End", true)}
             <Input
               type="datetime-local"
               value={edits.endDateTime ?? ""}
               onChange={e => onChange("endDateTime", e.target.value)}
+              onBlur={() => onBlur("endDateTime")}
+              disabled={locked}
               className={`h-8 text-sm ${errors.endDateTime ? "border-destructive" : ""}`}
             />
             {errors.endDateTime && <p className="text-xs text-destructive">{errors.endDateTime}</p>}
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Description</Label>
-          <Textarea value={edits.description ?? ""} onChange={e => onChange("description", e.target.value)} placeholder="Optional" className="min-h-[60px] text-sm resize-none" />
+          {fieldLabel("description", "Description")}
+          <Textarea value={edits.description ?? ""} onChange={e => onChange("description", e.target.value)} onBlur={() => onBlur("description")} disabled={locked} placeholder="Optional" className="min-h-[60px] text-sm resize-none" />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Location</Label>
-          <Input value={edits.location ?? ""} onChange={e => onChange("location", e.target.value)} placeholder="Optional" className="h-8 text-sm" />
+          {fieldLabel("location", "Location")}
+          <Input value={edits.location ?? ""} onChange={e => onChange("location", e.target.value)} onBlur={() => onBlur("location")} disabled={locked} placeholder="Optional" className="h-8 text-sm" />
         </div>
       </div>
     );
@@ -477,12 +523,12 @@ function CalendarPayloadEditor({
     return (
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">
-            Event to reschedule <span className="text-destructive">*</span>
-          </Label>
+          {fieldLabel("searchQuery", "Event to reschedule", true)}
           <Input
             value={edits.searchQuery ?? ""}
             onChange={e => onChange("searchQuery", e.target.value)}
+            onBlur={() => onBlur("searchQuery")}
+            disabled={locked}
             placeholder="Event title or keywords"
             className={`h-8 text-sm ${errors.searchQuery ? "border-destructive" : ""}`}
           />
@@ -495,25 +541,25 @@ function CalendarPayloadEditor({
         )}
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">
-              New start <span className="text-destructive">*</span>
-            </Label>
+            {fieldLabel("startDateTime", "New start", true)}
             <Input
               type="datetime-local"
               value={edits.startDateTime ?? ""}
               onChange={e => onChange("startDateTime", e.target.value)}
+              onBlur={() => onBlur("startDateTime")}
+              disabled={locked}
               className={`h-8 text-sm ${errors.startDateTime ? "border-destructive" : ""}`}
             />
             {errors.startDateTime && <p className="text-xs text-destructive">{errors.startDateTime}</p>}
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">
-              New end <span className="text-destructive">*</span>
-            </Label>
+            {fieldLabel("endDateTime", "New end", true)}
             <Input
               type="datetime-local"
               value={edits.endDateTime ?? ""}
               onChange={e => onChange("endDateTime", e.target.value)}
+              onBlur={() => onBlur("endDateTime")}
+              disabled={locked}
               className={`h-8 text-sm ${errors.endDateTime ? "border-destructive" : ""}`}
             />
             {errors.endDateTime && <p className="text-xs text-destructive">{errors.endDateTime}</p>}
@@ -526,26 +572,174 @@ function CalendarPayloadEditor({
   return null;
 }
 
-// Expanded card with editable payload for Gmail and Calendar actions.
-function EditableActionCard({
+// Editable task payload form (CREATE_TASK and UPDATE_TASK).
+function TaskPayloadEditor({
   action,
   edits,
   errors,
-  onFieldChange,
+  savingFields,
+  locked,
+  onChange,
+  onBlur,
 }: {
   action: ActionPlanDetail["actions"][number];
   edits: Record<string, string>;
   errors: Record<string, string>;
-  onFieldChange: (actionIndex: number, field: string, value: string) => void;
+  savingFields: Record<string, boolean>;
+  locked: boolean;
+  onChange: (field: string, value: string) => void;
+  onBlur: (field: string) => void;
 }) {
-  const isEditable = action.provider === "GMAIL" || action.provider === "GOOGLE_CALENDAR";
+  const selectClass = "h-8 text-sm w-full rounded-md border border-input bg-background px-3 py-1 text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed";
+
+  const fieldLabel = (name: string, label: string, required?: boolean) => (
+    <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
+      {label}
+      {required && <span className="text-destructive">*</span>}
+      {savingFields[name] && <Loader2 className="h-3 w-3 animate-spin" />}
+    </Label>
+  );
+
+  if (action.type === "CREATE_TASK") {
+    return (
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          {fieldLabel("title", "Title", true)}
+          <Input
+            value={edits.title ?? ""}
+            onChange={e => onChange("title", e.target.value)}
+            onBlur={() => onBlur("title")}
+            disabled={locked}
+            placeholder="Task title"
+            className={`h-8 text-sm ${errors.title ? "border-destructive" : ""}`}
+          />
+          {errors.title && <p className="text-xs text-destructive">{errors.title}</p>}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            {fieldLabel("priority", "Priority")}
+            <select
+              value={edits.priority ?? ""}
+              onChange={e => onChange("priority", e.target.value)}
+              onBlur={() => onBlur("priority")}
+              disabled={locked}
+              className={selectClass}
+            >
+              <option value="">No priority</option>
+              <option value="LOW">Low</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="HIGH">High</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            {fieldLabel("dueDate", "Due date")}
+            <Input
+              type="date"
+              value={edits.dueDate ?? ""}
+              onChange={e => onChange("dueDate", e.target.value)}
+              onBlur={() => onBlur("dueDate")}
+              disabled={locked}
+              className="h-8 text-sm"
+            />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          {fieldLabel("notes", "Notes")}
+          <Textarea
+            value={edits.notes ?? ""}
+            onChange={e => onChange("notes", e.target.value)}
+            onBlur={() => onBlur("notes")}
+            disabled={locked}
+            placeholder="Optional"
+            className="min-h-[60px] text-sm resize-none"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (action.type === "UPDATE_TASK") {
+    return (
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          {fieldLabel("title", "Title", true)}
+          <Input
+            value={edits.title ?? ""}
+            onChange={e => onChange("title", e.target.value)}
+            onBlur={() => onBlur("title")}
+            disabled={locked}
+            placeholder="Task title"
+            className={`h-8 text-sm ${errors.title ? "border-destructive" : ""}`}
+          />
+          {errors.title && <p className="text-xs text-destructive">{errors.title}</p>}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            {fieldLabel("status", "Status")}
+            <select
+              value={edits.status ?? ""}
+              onChange={e => onChange("status", e.target.value)}
+              onBlur={() => onBlur("status")}
+              disabled={locked}
+              className={selectClass}
+            >
+              <option value="">Unchanged</option>
+              <option value="OPEN">Open</option>
+              <option value="IN_PROGRESS">In progress</option>
+              <option value="DONE">Done</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            {fieldLabel("priority", "Priority")}
+            <select
+              value={edits.priority ?? ""}
+              onChange={e => onChange("priority", e.target.value)}
+              onBlur={() => onBlur("priority")}
+              disabled={locked}
+              className={selectClass}
+            >
+              <option value="">Unchanged</option>
+              <option value="LOW">Low</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="HIGH">High</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// Expanded card with editable payload for Gmail, Calendar, and Task actions.
+function EditableActionCard({
+  action,
+  state,
+  locked,
+  onFieldChange,
+  onFieldBlur,
+}: {
+  action: ActionPlanDetail["actions"][number];
+  state: ActionEditState;
+  locked: boolean;
+  onFieldChange: (field: string, value: string) => void;
+  onFieldBlur: (field: string) => void;
+}) {
+  const isEditable =
+    action.provider === "GMAIL" ||
+    action.provider === "GOOGLE_CALENDAR" ||
+    action.type === "CREATE_TASK" ||
+    action.type === "UPDATE_TASK";
   if (!isEditable) return <ActionCard action={action} />;
 
   const meta = ACTION_META[action.type];
   const Icon = meta?.icon;
+  const isSaving = Object.values(state.savingFields).some(Boolean);
+  const hasErrors = Object.values(state.fieldErrors).some(Boolean);
 
   return (
-    <div className="rounded-lg border border-border p-4 space-y-3">
+    <div className={`rounded-lg border p-4 space-y-3 ${hasErrors ? "border-destructive/50" : "border-border"} ${locked ? "opacity-60" : ""}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted">
@@ -553,22 +747,53 @@ function EditableActionCard({
           </div>
           <span className="font-medium text-sm text-foreground">{meta?.label}</span>
         </div>
-        <RiskBadge level={action.riskLevel} />
+        <div className="flex items-center gap-2">
+          {isSaving && (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Saving
+            </span>
+          )}
+          {state.showSaved && !isSaving && (
+            <span className="inline-flex items-center gap-1 text-xs text-success">
+              <CheckCircle2 className="h-3 w-3" />
+              Saved
+            </span>
+          )}
+          <RiskBadge level={action.riskLevel} />
+        </div>
       </div>
       {action.provider === "GMAIL" && (
         <GmailPayloadEditor
           action={action}
-          edits={edits}
-          errors={errors}
-          onChange={(field, value) => onFieldChange(action.index, field, value)}
+          edits={state.payload}
+          errors={state.fieldErrors}
+          savingFields={state.savingFields}
+          locked={locked}
+          onChange={onFieldChange}
+          onBlur={onFieldBlur}
         />
       )}
       {action.provider === "GOOGLE_CALENDAR" && (
         <CalendarPayloadEditor
           action={action}
-          edits={edits}
-          errors={errors}
-          onChange={(field, value) => onFieldChange(action.index, field, value)}
+          edits={state.payload}
+          errors={state.fieldErrors}
+          savingFields={state.savingFields}
+          locked={locked}
+          onChange={onFieldChange}
+          onBlur={onFieldBlur}
+        />
+      )}
+      {(action.type === "CREATE_TASK" || action.type === "UPDATE_TASK") && (
+        <TaskPayloadEditor
+          action={action}
+          edits={state.payload}
+          errors={state.fieldErrors}
+          savingFields={state.savingFields}
+          locked={locked}
+          onChange={onFieldChange}
+          onBlur={onFieldBlur}
         />
       )}
     </div>
@@ -662,11 +887,19 @@ function ActionResultCard({
           {action.type === "CREATE_CALENDAR_EVENT" && result.raw && (() => {
             const raw = result.raw as unknown as CreateCalendarEventRaw;
             return (
-              <a href={raw.htmlLink} target="_blank" rel="noopener noreferrer"
-                 className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
-                <ExternalLink className="h-3.5 w-3.5" />
-                Open in Google Calendar
-              </a>
+              <div className="space-y-1.5">
+                {raw.title && <p className="text-sm font-medium text-foreground">{raw.title}</p>}
+                <p className="text-xs text-muted-foreground">
+                  {new Date(raw.newStartDateTime).toLocaleString()}
+                  {" – "}
+                  {new Date(raw.newEndDateTime).toLocaleString()}
+                </p>
+                <a href={raw.htmlLink} target="_blank" rel="noopener noreferrer"
+                   className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Open in Google Calendar
+                </a>
+              </div>
             );
           })()}
 
@@ -679,6 +912,8 @@ function ActionResultCard({
                   {new Date(raw.oldStartDateTime).toLocaleString()}
                   {" → "}
                   {new Date(raw.newStartDateTime).toLocaleString()}
+                  {" – "}
+                  {new Date(raw.newEndDateTime).toLocaleString()}
                 </p>
                 <a href={raw.htmlLink} target="_blank" rel="noopener noreferrer"
                    className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
@@ -808,10 +1043,12 @@ export default function ActionPlansPage() {
   const { user, initialized } = useAuth();
 
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
-  const [payloadEdits, setPayloadEdits] = useState<PayloadEdits>({});
+  const [actionStates, setActionStates] = useState<AllActionEditStates>({});
+  const [planLocked, setPlanLocked] = useState(false);
   const [instruction, setInstruction] = useState("");
   const [history, setHistory] = useState<ActionPlanSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const saveTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
   const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; plan: ActionPlanDetail | null }>({ open: false, plan: null });
   const [confirmText, setConfirmText] = useState("");
@@ -837,16 +1074,27 @@ export default function ActionPlansPage() {
     if (initialized && user) loadHistory();
   }, [initialized, user, loadHistory]);
 
+  useEffect(() => {
+    return () => {
+      Object.values(saveTimers.current).forEach(t => clearTimeout(t));
+    };
+  }, []);
+
   if (!initialized || !user) return null;
 
   // ── Derived draft-phase values ──
 
   const draftPlan = phase.kind === "draft" ? phase.plan : null;
-  const draftValidationErrors: ValidationErrors = draftPlan
-    ? validatePayloadEdits(draftPlan, payloadEdits)
-    : {};
-  const draftHasErrors = Object.keys(draftValidationErrors).length > 0;
   const draftHasSendEmail = draftPlan ? draftPlan.actions.some(a => a.type === "SEND_EMAIL") : false;
+
+  const canConfirm = !planLocked && draftPlan !== null &&
+    draftPlan.actions.every(action => {
+      const state = actionStates[action.index];
+      if (!state) return true;
+      if (Object.values(state.savingFields).some(Boolean)) return false;
+      if (Object.values(state.fieldErrors).some(Boolean)) return false;
+      return Object.keys(getRequiredFieldErrors(action.type, state.savedPayload)).length === 0;
+    });
 
   // ── Handlers ──
 
@@ -856,17 +1104,97 @@ export default function ActionPlansPage() {
     try {
       const plan = await actionPlansApi.preview(instruction.trim());
       setPhase({ kind: "draft", plan });
-      setPayloadEdits(initPayloadEdits(plan));
+      setActionStates(initActionStates(plan));
+      setPlanLocked(false);
     } catch (err: unknown) {
       setPhase({ kind: "error", message: err instanceof Error ? err.message : "Preview failed." });
     }
   }
 
-  function setPayloadField(actionIndex: number, field: string, value: string) {
-    setPayloadEdits(prev => ({
+  function handleFieldChange(actionIndex: number, field: string, value: string) {
+    setActionStates(prev => {
+      const cur = prev[actionIndex];
+      if (!cur) return prev;
+      return {
+        ...prev,
+        [actionIndex]: {
+          ...cur,
+          payload: { ...cur.payload, [field]: value },
+          fieldErrors: { ...cur.fieldErrors, [field]: "" },
+          showSaved: false,
+        },
+      };
+    });
+  }
+
+  async function handleFieldBlur(planId: string, actionIndex: number, field: string) {
+    const state = actionStates[actionIndex];
+    if (!state || planLocked) return;
+
+    const current = state.payload[field] ?? "";
+    const saved = state.savedPayload[field] ?? "";
+    if (current === saved) return;
+
+    setActionStates(prev => ({
       ...prev,
-      [actionIndex]: { ...(prev[actionIndex] ?? {}), [field]: value },
+      [actionIndex]: {
+        ...prev[actionIndex]!,
+        savingFields: { ...prev[actionIndex]!.savingFields, [field]: true },
+        showSaved: false,
+      },
     }));
+
+    try {
+      const result = await actionPlansApi.updatePayload(planId, actionIndex, state.payload);
+      const newSaved = Object.fromEntries(
+        Object.entries(result.payload).map(([k, v]) => [k, String(v ?? "")])
+      );
+      setActionStates(prev => ({
+        ...prev,
+        [actionIndex]: {
+          ...prev[actionIndex]!,
+          savedPayload: newSaved,
+          fieldErrors: {},
+          savingFields: { ...prev[actionIndex]!.savingFields, [field]: false },
+          showSaved: true,
+        },
+      }));
+      if (saveTimers.current[actionIndex]) clearTimeout(saveTimers.current[actionIndex]);
+      saveTimers.current[actionIndex] = setTimeout(() => {
+        setActionStates(prev => {
+          const s = prev[actionIndex];
+          if (!s) return prev;
+          return { ...prev, [actionIndex]: { ...s, showSaved: false } };
+        });
+      }, 2000);
+    } catch (err: unknown) {
+      const e = err as { code?: string; errors?: PayloadFieldError[] };
+      if (e.code === "CONFLICT") {
+        setPlanLocked(true);
+        setActionStates(prev => ({
+          ...prev,
+          [actionIndex]: {
+            ...prev[actionIndex]!,
+            savingFields: { ...prev[actionIndex]!.savingFields, [field]: false },
+          },
+        }));
+      } else {
+        const fieldErrors: Record<string, string> = {};
+        if (e.code === "VALIDATION" && Array.isArray(e.errors)) {
+          e.errors.forEach((fe) => { fieldErrors[fe.field] = fe.message; });
+        } else {
+          fieldErrors[field] = "Failed to save. Please try again.";
+        }
+        setActionStates(prev => ({
+          ...prev,
+          [actionIndex]: {
+            ...prev[actionIndex]!,
+            fieldErrors,
+            savingFields: { ...prev[actionIndex]!.savingFields, [field]: false },
+          },
+        }));
+      }
+    }
   }
 
   async function executeConfirm(plan: ActionPlanDetail) {
@@ -881,7 +1209,7 @@ export default function ActionPlansPage() {
   }
 
   function handleConfirm(plan: ActionPlanDetail) {
-    if (Object.keys(validatePayloadEdits(plan, payloadEdits)).length > 0) return;
+    if (!canConfirm) return;
     if (plan.riskLevel === "HIGH") {
       setConfirmText("");
       setConfirmDialog({ open: true, plan });
@@ -895,7 +1223,10 @@ export default function ActionPlansPage() {
   function reset() {
     setInstruction("");
     setPhase({ kind: "idle" });
-    setPayloadEdits({});
+    setActionStates({});
+    setPlanLocked(false);
+    Object.values(saveTimers.current).forEach(t => clearTimeout(t));
+    saveTimers.current = {};
   }
 
   // ── Render ──
@@ -961,14 +1292,22 @@ export default function ActionPlansPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {planLocked && (
+                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>This plan has already been confirmed and can no longer be edited. Please start a new instruction.</span>
+                </div>
+              )}
+
               <div className="space-y-3">
                 {phase.plan.actions.map((action) => (
                   <EditableActionCard
                     key={action.index}
                     action={action}
-                    edits={payloadEdits[action.index] ?? {}}
-                    errors={draftValidationErrors[action.index] ?? {}}
-                    onFieldChange={setPayloadField}
+                    state={actionStates[action.index] ?? { payload: {}, savedPayload: {}, fieldErrors: {}, savingFields: {}, showSaved: false }}
+                    locked={planLocked}
+                    onFieldChange={(field, value) => handleFieldChange(action.index, field, value)}
+                    onFieldBlur={(field) => handleFieldBlur(phase.plan.actionPlanId, action.index, field)}
                   />
                 ))}
               </div>
@@ -992,7 +1331,7 @@ export default function ActionPlansPage() {
               <div className="flex gap-3 pt-2">
                 <Button
                   onClick={() => handleConfirm(phase.plan)}
-                  disabled={draftHasErrors}
+                  disabled={!canConfirm}
                   className="flex-1"
                 >
                   {confirmButtonLabel(phase.plan)}

@@ -27,10 +27,16 @@ export interface AuthTokenResponse {
   tenants: TenantSummary[];
 }
 
+export interface PayloadFieldError {
+  field: string;
+  message: string;
+}
+
 export interface ApiError {
-  code: "VALIDATION" | "BAD_REQUEST" | "NOT_FOUND" | "FORBIDDEN" | "INTERNAL";
+  code: "VALIDATION" | "BAD_REQUEST" | "NOT_FOUND" | "FORBIDDEN" | "INTERNAL" | "CONFLICT";
   message: string;
   timestamp: string;
+  errors?: PayloadFieldError[];
 }
 
 // ── Module-level token store ─────────────────────────────────────────────────
@@ -80,7 +86,7 @@ async function apiFetch<T>(
       message: `HTTP ${res.status}`,
       timestamp: new Date().toISOString(),
     }));
-    throw Object.assign(new Error(err.message), { code: err.code });
+    throw Object.assign(new Error(err.message), { code: err.code, errors: err.errors });
   }
 
   return res.json() as Promise<T>;
@@ -358,6 +364,14 @@ export interface ConfirmResponse {
   actions: ActionExecutionResult[];
 }
 
+export interface ActionPayloadResponse {
+  actionIndex: number;
+  type: ActionType;
+  provider: IntegrationProvider;
+  riskLevel: RiskLevel;
+  payload: Record<string, unknown>;
+}
+
 // ── Action plan endpoints ─────────────────────────────────────────────────────
 
 export const actionPlansApi = {
@@ -371,6 +385,12 @@ export const actionPlansApi = {
     apiFetch<ConfirmResponse>(`/api/v1/action-plans/${id}/confirm`, {
       method: "POST",
     }),
+
+  updatePayload: (planId: string, actionIndex: number, payload: Record<string, string>) =>
+    apiFetch<ActionPayloadResponse>(
+      `/api/v1/action-plans/${planId}/actions/${actionIndex}/payload`,
+      { method: "PATCH", body: JSON.stringify({ payload }) }
+    ),
 
   list: () =>
     apiFetch<ActionPlanSummary[]>("/api/v1/action-plans"),
