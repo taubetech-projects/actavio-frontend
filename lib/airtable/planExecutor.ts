@@ -1,18 +1,19 @@
-import { actionPlansApi, type ActionPlanDetail } from "@/lib/api";
+import { actionPlansApi, executionApi } from "@/lib/api";
 import type { PlanExecutionResult } from "@/types/airtable";
+import type { ExecutionRunResponse } from "@/types/execution";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const TERMINAL_STATUSES = new Set(["SUCCESS", "COMPLETED", "FAILED", "CANCELLED"]);
-
-async function pollUntilComplete(
+async function pollExecution(
   planId: string,
-  maxAttempts = 20
-): Promise<ActionPlanDetail> {
+  maxAttempts = 15
+): Promise<ExecutionRunResponse> {
   for (let i = 0; i < maxAttempts; i++) {
-    const plan = await actionPlansApi.get(planId);
-    if (TERMINAL_STATUSES.has(plan.status)) return plan;
-    await sleep(Math.min(1500 * Math.pow(1.3, i), 8000));
+    const execution = await executionApi.getLatest(planId);
+    if (execution.status === "SUCCESS" || execution.status === "FAILED") {
+      return execution;
+    }
+    await sleep(Math.min(2000 * Math.pow(1.2, i), 8000));
   }
   throw new Error("Airtable operation timed out after 30 seconds.");
 }
@@ -24,27 +25,22 @@ export async function executeAirtablePlan(
   const plan = await actionPlansApi.preview(instructionText);
   const planId = plan.actionPlanId;
 
-  // 2. Confirm the plan (kick off execution)
+  // 2. Confirm the plan (kicks off async execution)
   await actionPlansApi.confirm(planId);
 
-  // 3. Poll until terminal state
-  const completed = await pollUntilComplete(planId);
+  // 3. Poll executions/latest until SUCCESS or FAILED
+  const execution = await pollExecution(planId);
 
-  // 4. Extract the first action's result
-  const action = completed.actions?.[0];
-  const payload = action?.payload ?? {};
-  const raw = payload.raw ?? null;
-  const link = (payload.link as string | null) ?? null;
-  const errorCode = (payload.errorCode as string | null) ?? null;
-  const messageUser = (payload.messageUser as string | null) ?? null;
+  // 4. Extract first action result
+  const actionResult = execution.actions?.[0];
+  const data = actionResult?.data ?? null;
+  const link = actionResult?.link ?? null;
+  const errorCode = actionResult?.errorCode ?? null;
+  const messageUser = actionResult?.errorMessage ?? null;
 
-  if (
-    completed.status === "FAILED" ||
-    completed.status === "CANCELLED" ||
-    (action as { status?: string } | undefined)?.status === "FAILED"
-  ) {
-    return { raw, link, errorCode, messageUser, status: "FAILED" };
+  if (execution.status === "FAILED" || actionResult?.status === "FAILED") {
+    return { raw: data, link, errorCode, messageUser, status: "FAILED" };
   }
 
-  return { raw, link, errorCode, messageUser, status: "SUCCESS" };
+  return { raw: data, link, errorCode, messageUser, status: "SUCCESS" };
 }

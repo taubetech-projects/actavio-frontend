@@ -48,12 +48,14 @@ import {
   type RiskLevel,
   type ActionPlanStatus,
   type ActionExecutionResult,
-  type ConfirmResponse,
   type ReadEmailRaw,
   type CreateCalendarEventRaw,
   type RescheduleCalendarEventRaw,
   type PayloadFieldError,
 } from "@/lib/api";
+import type { ExecutionRunResponse, ActionResultResponse } from "@/types/execution";
+import { useExecutionResult } from "@/hooks/useExecutionResult";
+import { ExecutionDataRenderer } from "@/components/ExecutionDataRenderer";
 
 // ── Metadata maps ─────────────────────────────────────────────────────────────
 
@@ -105,8 +107,9 @@ type Phase =
   | { kind: "idle" }
   | { kind: "previewing" }
   | { kind: "draft"; plan: ActionPlanDetail }
-  | { kind: "confirming" }
-  | { kind: "result"; plan: ActionPlanDetail; result: ConfirmResponse }
+  | { kind: "confirming"; plan: ActionPlanDetail }
+  | { kind: "executing"; plan: ActionPlanDetail }
+  | { kind: "result"; plan: ActionPlanDetail; execution: ExecutionRunResponse }
   | { kind: "error"; message: string };
 
 interface ActionEditState {
@@ -273,6 +276,8 @@ function confirmButtonLabel(plan: ActionPlanDetail): string {
       case "RESCHEDULE_CALENDAR_EVENT": return "Reschedule Event";
       case "CREATE_FACEBOOK_POST":      return "Post to Facebook";
       case "CREATE_LINKEDIN_POST":      return "Post to LinkedIn";
+      case "FETCH_AIRTABLE_RECORDS":    return "Fetch Records";
+      case "CREATE_AIRTABLE_RECORD":    return "Create Record";
     }
   }
   if (plan.riskLevel === "HIGH")   return "Review & Confirm";
@@ -1016,7 +1021,7 @@ function ActionResultCard({
   onGoToSettings,
 }: {
   action: ActionPlanDetail["actions"][number];
-  result: ActionExecutionResult;
+  result: ActionResultResponse;
   onGoToSettings: () => void;
 }) {
   const meta = ACTION_META[action.type];
@@ -1072,8 +1077,8 @@ function ActionResultCard({
             </a>
           )}
 
-          {action.type === "READ_EMAIL" && result.raw && (() => {
-            const raw = result.raw as unknown as ReadEmailRaw;
+          {action.type === "READ_EMAIL" && result.data && (() => {
+            const raw = result.data as unknown as ReadEmailRaw;
             return (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">
@@ -1099,8 +1104,8 @@ function ActionResultCard({
             );
           })()}
 
-          {action.type === "CREATE_CALENDAR_EVENT" && result.raw && (() => {
-            const raw = result.raw as unknown as CreateCalendarEventRaw;
+          {action.type === "CREATE_CALENDAR_EVENT" && result.data && (() => {
+            const raw = result.data as unknown as CreateCalendarEventRaw;
             return (
               <div className="space-y-1.5">
                 {raw.title && <p className="text-sm font-medium text-foreground">{raw.title}</p>}
@@ -1118,8 +1123,8 @@ function ActionResultCard({
             );
           })()}
 
-          {action.type === "RESCHEDULE_CALENDAR_EVENT" && result.raw && (() => {
-            const raw = result.raw as unknown as RescheduleCalendarEventRaw;
+          {action.type === "RESCHEDULE_CALENDAR_EVENT" && result.data && (() => {
+            const raw = result.data as unknown as RescheduleCalendarEventRaw;
             return (
               <div className="space-y-1.5">
                 <p className="text-sm font-medium text-foreground">Rescheduled: {raw.title}</p>
@@ -1146,14 +1151,18 @@ function ActionResultCard({
               View Post
             </a>
           )}
+
+          {(action.type === "FETCH_AIRTABLE_RECORDS" || action.type === "CREATE_AIRTABLE_RECORD") && (
+            <ExecutionDataRenderer action={result} />
+          )}
         </>
       )}
 
       {/* Failed content */}
       {!ok && (
         <div className="space-y-2">
-          {result.messageUser && (
-            <p className="text-sm text-destructive">{result.messageUser}</p>
+          {result.errorMessage && (
+            <p className="text-sm text-destructive">{result.errorMessage}</p>
           )}
 
           {result.errorCode === "EVENT_NOT_FOUND" && (
@@ -1303,6 +1312,41 @@ export default function ActionPlansPage() {
     };
   }, []);
 
+  // ── Execution polling ──
+  const executingPlanId =
+    phase.kind === "executing" ? phase.plan.actionPlanId : null;
+  const { result: execResult, error: execError, timedOut: execTimedOut } =
+    useExecutionResult(executingPlanId, phase.kind === "executing");
+
+  useEffect(() => {
+    if (!execResult) return;
+    if (execResult.status === "SUCCESS" || execResult.status === "FAILED") {
+      setPhase((prev) => {
+        if (prev.kind !== "executing") return prev;
+        return { kind: "result", plan: prev.plan, execution: execResult };
+      });
+      loadHistory();
+    }
+  }, [execResult, loadHistory]);
+
+  useEffect(() => {
+    if (execError) {
+      setPhase((prev) => {
+        if (prev.kind !== "executing") return prev;
+        return { kind: "error", message: execError };
+      });
+    }
+  }, [execError]);
+
+  useEffect(() => {
+    if (execTimedOut) {
+      setPhase((prev) => {
+        if (prev.kind !== "executing") return prev;
+        return { kind: "error", message: "Taking longer than expected — check back later." };
+      });
+    }
+  }, [execTimedOut]);
+
   if (!initialized || !user) return null;
 
   // ── Derived draft-phase values ──
@@ -1421,11 +1465,10 @@ export default function ActionPlansPage() {
   }
 
   async function executeConfirm(plan: ActionPlanDetail) {
-    setPhase({ kind: "confirming" });
+    setPhase({ kind: "confirming", plan });
     try {
-      const result = await actionPlansApi.confirm(plan.actionPlanId);
-      setPhase({ kind: "result", plan, result });
-      loadHistory();
+      await actionPlansApi.confirm(plan.actionPlanId);
+      setPhase({ kind: "executing", plan });
     } catch (err: unknown) {
       setPhase({ kind: "error", message: err instanceof Error ? err.message : "Confirm failed." });
     }
@@ -1476,7 +1519,7 @@ export default function ActionPlansPage() {
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}
               className="min-h-[100px] resize-none text-base"
-              disabled={phase.kind === "previewing" || phase.kind === "confirming"}
+              disabled={phase.kind === "previewing" || phase.kind === "confirming" || phase.kind === "executing"}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handlePreview();
               }}
@@ -1489,7 +1532,7 @@ export default function ActionPlansPage() {
                 <button
                   key={hint.label}
                   type="button"
-                  disabled={phase.kind === "previewing" || phase.kind === "confirming"}
+                  disabled={phase.kind === "previewing" || phase.kind === "confirming" || phase.kind === "executing"}
                   onClick={() => setInstruction(hint.value)}
                   className="rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50"
                 >
@@ -1581,8 +1624,8 @@ export default function ActionPlansPage() {
           </Card>
         )}
 
-        {/* Confirming phase */}
-        {phase.kind === "confirming" && (
+        {/* Confirming / Executing phase */}
+        {(phase.kind === "confirming" || phase.kind === "executing") && (
           <Card>
             <CardContent className="pt-6">
               <div className="flex flex-col items-center justify-center py-8 gap-4 text-center">
@@ -1591,8 +1634,12 @@ export default function ActionPlansPage() {
                   <Loader2 className="absolute inset-0 m-auto h-8 w-8 animate-spin text-foreground" />
                 </div>
                 <div>
-                  <p className="font-semibold text-foreground">Executing plan</p>
-                  <p className="text-sm text-muted-foreground mt-1">Actions are running…</p>
+                  <p className="font-semibold text-foreground">
+                    {phase.kind === "confirming" ? "Confirming plan…" : "Executing plan"}
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {phase.kind === "executing" ? "Actions are running — this usually takes 1–5 seconds." : "Sending to execution engine…"}
+                  </p>
                 </div>
               </div>
             </CardContent>
@@ -1604,7 +1651,7 @@ export default function ActionPlansPage() {
           <Card>
             <CardContent className="pt-6 space-y-4">
               <div className="flex flex-col items-center text-center gap-2 py-4">
-                {phase.result.status === "SUCCESS" ? (
+                {phase.execution.status === "SUCCESS" ? (
                   <>
                     <CheckCircle2 className="h-12 w-12 text-success" />
                     <p className="text-lg font-semibold text-foreground">Plan executed successfully</p>
@@ -1621,7 +1668,9 @@ export default function ActionPlansPage() {
               {/* Per-action result cards */}
               <div className="space-y-3">
                 {phase.plan.actions.map(action => {
-                  const actionResult = (phase.result.actions ?? []).find(r => r.index === action.index);
+                  const actionResult = phase.execution.actions.find(
+                    r => r.actionIndex === action.index
+                  );
                   if (!actionResult) return <ActionCard key={action.index} action={action} />;
                   return (
                     <ActionResultCard

@@ -380,8 +380,15 @@ export interface RescheduleCalendarEventRaw {
 }
 
 export interface ConfirmResponse {
-  status: "SUCCESS" | "FAILED";
-  actions: ActionExecutionResult[];
+  status: "SUCCESS" | "FAILED" | "EXECUTING";
+  requestId?: string;
+  actions?: ActionExecutionResult[];
+}
+
+// New shape returned by the confirm endpoint when execution is asynchronous.
+export interface ConfirmInitiateResponse {
+  status: "EXECUTING";
+  requestId: string;
 }
 
 export interface ActionPayloadResponse {
@@ -438,6 +445,16 @@ export const actionPlansApi = {
 
   get: (id: string) =>
     apiFetch<ActionPlanDetail>(`/api/v1/action-plans/${id}`),
+};
+
+// ── Execution result endpoint ─────────────────────────────────────────────────
+
+// Imported lazily to avoid a circular-type dependency; the actual types live in types/execution.ts.
+export const executionApi = {
+  getLatest: (planId: string) =>
+    apiFetch<import("@/types/execution").ExecutionRunResponse>(
+      `/api/v1/action-plans/${planId}/executions/latest`
+    ),
 };
 
 // ── Plan actions endpoints ────────────────────────────────────────────────────
