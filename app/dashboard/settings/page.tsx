@@ -97,7 +97,7 @@ const PROVIDER_META: Record<
   FACEBOOK: {
     name: "Facebook",
     icon: Facebook,
-    description: "Create and update Facebook pages",
+    description: "Post to your Facebook Page or profile",
   },
   INSTAGRAM: {
     name: "Instagram",
@@ -112,12 +112,17 @@ const PROVIDER_META: Record<
   LINKEDIN: {
     name: "LinkedIn",
     icon: LinkedIn,
-    description: "Create and update LinkedIn pages",
+    description: "Share posts to your LinkedIn feed",
   },
   TIKTOK: {
     name: "TikTok",
     icon: TikTok,
     description: "Create and update TikTok pages",
+  },
+  AIRTABLE: {
+    name: "Airtable",
+    icon: ListTodo,
+    description: "Read and write records in your Airtable bases",
   },
   INTERNAL_TASKS: {
     name: "Internal Tasks",
@@ -142,6 +147,7 @@ const OAUTH_PROVIDERS = new Set<IntegrationProvider>([
   "TWITTER",
   "LINKEDIN",
   "TIKTOK",
+  "AIRTABLE",
 ]);
 
 // ── Status badge ─────────────────────────────────────────────────────────────
@@ -710,7 +716,29 @@ export default function SettingsPage() {
                             {meta.description}
                           </p>
 
-                          {status === "ERROR" && integration?.lastError && (
+                          {/* Facebook: 60-day expiry notice when connected */}
+                          {provider === "FACEBOOK" && isConnected && (
+                            <div className="flex items-start gap-1.5 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-2.5 py-2 text-xs text-yellow-700 dark:text-yellow-500">
+                              <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                              Facebook connections expire after 60 days. You&apos;ll be prompted to reconnect.
+                            </div>
+                          )}
+
+                          {/* Facebook: expired token banner */}
+                          {provider === "FACEBOOK" && integration?.lastError === "TOKEN_EXPIRED" && (
+                            <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
+                              <span>Your Facebook connection has expired.</span>
+                              <button
+                                type="button"
+                                className="font-medium underline-offset-2 hover:underline ml-2"
+                                onClick={() => handleConnectClick(provider)}
+                              >
+                                Reconnect →
+                              </button>
+                            </div>
+                          )}
+
+                          {status === "ERROR" && integration?.lastError && integration.lastError !== "TOKEN_EXPIRED" && (
                             <p className="text-xs text-destructive">
                               {integration.lastError}
                             </p>
@@ -744,7 +772,7 @@ export default function SettingsPage() {
                                 ) : (
                                   <Plug className="mr-1.5 h-3 w-3" />
                                 )}
-                                {status === "ERROR" ? "Reconnect" : "Connect"}
+                                {status === "ERROR" ? "Reconnect" : `Connect ${meta.name}`}
                               </Button>
                             )}
                           </div>

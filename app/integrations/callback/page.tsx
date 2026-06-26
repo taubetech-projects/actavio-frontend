@@ -1,11 +1,10 @@
 "use client";
 
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-// Human-readable labels for each provider value the backend may return.
 const PROVIDER_LABELS: Record<string, string> = {
   GOOGLE_CALENDAR: "Google Calendar",
   GMAIL: "Gmail",
@@ -19,10 +18,18 @@ const PROVIDER_LABELS: Record<string, string> = {
   TWITTER: "Twitter",
   LINKEDIN: "LinkedIn",
   TIKTOK: "TikTok",
+  AIRTABLE: "Airtable",
 };
 
-// Maps backend error codes to user-facing copy.
-const ERROR_COPY: Record<string, string> = {
+const AIRTABLE_ERROR_MESSAGES: Record<string, string> = {
+  invalid_state:         "The OAuth session expired or was invalid. Please try again.",
+  token_exchange_failed: "Failed to exchange the authorisation code. Please try again.",
+  storage_failed:        "Connected but failed to save your credentials. Please try again.",
+  access_denied:         "You declined the Airtable permissions. No changes were made.",
+  unknown:               "An unexpected error occurred during Airtable connection.",
+};
+
+const GENERIC_ERROR_MESSAGES: Record<string, string> = {
   access_denied:
     "You declined to grant access. No changes were made — you can try again whenever you're ready.",
   token_exchange_failed:
@@ -33,6 +40,24 @@ const ERROR_COPY: Record<string, string> = {
     "The integration record was not found. Please try connecting again.",
 };
 
+function getRedirectTarget(provider: string): string {
+  if (provider === "AIRTABLE") return "/integrations";
+  return "/dashboard/settings";
+}
+
+function useCountdown(from: number, active: boolean, onComplete: () => void) {
+  const [count, setCount] = useState(from);
+
+  useEffect(() => {
+    if (!active) return;
+    if (count <= 0) { onComplete(); return; }
+    const t = setTimeout(() => setCount((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [count, active, onComplete]);
+
+  return count;
+}
+
 function CallbackContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -41,17 +66,17 @@ function CallbackContent() {
   const errorCode = searchParams.get("error") ?? "";
   const provider = searchParams.get("provider") ?? "";
   const providerLabel = PROVIDER_LABELS[provider] ?? provider;
+  const redirectTarget = getRedirectTarget(provider);
 
+  const errorMessageMap =
+    provider === "AIRTABLE" ? AIRTABLE_ERROR_MESSAGES : GENERIC_ERROR_MESSAGES;
   const errorMessage =
-    ERROR_COPY[errorCode] ??
+    errorMessageMap[errorCode] ??
     (errorCode ? "An unexpected error occurred. Please try again." : null);
 
-  // Auto-navigate to settings after a short delay on success.
-  useEffect(() => {
-    if (!success) return;
-    const timer = setTimeout(() => router.push("/dashboard/settings"), 3000);
-    return () => clearTimeout(timer);
-  }, [success, router]);
+  const countdown = useCountdown(3, success || !!errorMessage, () => {
+    router.push(redirectTarget);
+  });
 
   if (success) {
     return (
@@ -62,15 +87,18 @@ function CallbackContent() {
             {providerLabel ? `${providerLabel} connected` : "Integration connected"}
           </h1>
           <p className="text-sm text-muted-foreground">
-            Actavio can now act on your behalf. Redirecting to settings&hellip;
+            Actavio can now act on your behalf.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Redirecting in {countdown}s…
           </p>
         </div>
         <Button
           variant="outline"
           size="sm"
-          onClick={() => router.push("/dashboard/settings")}
+          onClick={() => router.push(redirectTarget)}
         >
-          Go to Settings
+          {provider === "AIRTABLE" ? "Go to Integrations" : "Go to Settings"}
         </Button>
       </div>
     );
@@ -83,16 +111,19 @@ function CallbackContent() {
         <div className="space-y-1">
           <h1 className="text-xl font-semibold text-foreground">Connection failed</h1>
           <p className="text-sm text-muted-foreground">{errorMessage}</p>
+          <p className="text-xs text-muted-foreground">
+            Redirecting in {countdown}s…
+          </p>
         </div>
         <div className="flex gap-3">
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push("/dashboard/settings")}
+            onClick={() => router.push(redirectTarget)}
           >
             Cancel
           </Button>
-          <Button size="sm" onClick={() => router.push("/dashboard/settings")}>
+          <Button size="sm" onClick={() => router.push(redirectTarget)}>
             Try again
           </Button>
         </div>

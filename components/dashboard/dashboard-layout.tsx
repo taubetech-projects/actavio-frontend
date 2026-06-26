@@ -83,6 +83,8 @@ export default function DashboardLayout({
                 );
               })}
 
+              {/* Admin Navigation */}
+              {/*
               {isAdmin && (
                 <>
                   <div className="mx-2 h-6 w-px bg-border" />
@@ -105,6 +107,7 @@ export default function DashboardLayout({
                   })}
                 </>
               )}
+              */}
             </nav>
           </div>
 
@@ -140,6 +143,12 @@ export default function DashboardLayout({
                     </Link>
                   </DropdownMenuItem>
                 )}
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/users" className="cursor-pointer">
+                    <Users className="mr-2 h-4 w-4" />
+                    Manage Users
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={logout}

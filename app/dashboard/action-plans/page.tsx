@@ -37,6 +37,7 @@ import {
   DialogFooter,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Facebook, LinkedIn } from "@/components/social-icons";
 import DashboardLayout from "@/components/dashboard/dashboard-layout";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -67,6 +68,10 @@ const ACTION_META: Record<ActionType, { label: string; icon: React.ElementType }
   TRIGGER_WORKFLOW:          { label: "Trigger workflow",          icon: Zap },
   LOG_CRM_ACTIVITY:          { label: "Log CRM activity",          icon: BarChart2 },
   UPDATE_DEAL_STATUS:        { label: "Update deal status",        icon: TrendingUp },
+  CREATE_FACEBOOK_POST:      { label: "Post to Facebook",          icon: Facebook },
+  CREATE_LINKEDIN_POST:      { label: "Post to LinkedIn",          icon: LinkedIn },
+  FETCH_AIRTABLE_RECORDS:    { label: "Fetch Airtable records",    icon: BarChart2 },
+  CREATE_AIRTABLE_RECORD:    { label: "Create Airtable record",    icon: Edit },
 };
 
 const RISK_STYLE: Record<RiskLevel, { badge: string; label: string }> = {
@@ -82,6 +87,9 @@ const STATUS_STYLE: Record<ActionPlanStatus, { icon: React.ElementType; classNam
   SUCCESS:   { icon: CheckCircle2, className: "text-success",          label: "Success" },
   FAILED:    { icon: XCircle,      className: "text-destructive",      label: "Failed" },
   CANCELLED: { icon: XCircle,      className: "text-muted-foreground", label: "Cancelled" },
+  PENDING:   { icon: Clock,        className: "text-muted-foreground", label: "Pending" },
+  RUNNING:   { icon: Loader2,      className: "text-yellow-500",       label: "Running" },
+  COMPLETED: { icon: CheckCircle2, className: "text-success",          label: "Completed" },
 };
 
 const READ_EMAIL_SUGGESTIONS: Array<{ label: string; value: string }> = [
@@ -184,6 +192,18 @@ function initActionStates(plan: ActionPlanDetail): AllActionEditStates {
         status:   String(p.status   ?? ""),
         priority: String(p.priority ?? ""),
       };
+    } else if (action.type === "CREATE_FACEBOOK_POST") {
+      payload = {
+        message:   String(p.message   ?? ""),
+        pageId:    String(p.pageId    ?? ""),
+        link:      String(p.link      ?? ""),
+        published: String(p.published ?? "true"),
+      };
+    } else if (action.type === "CREATE_LINKEDIN_POST") {
+      payload = {
+        text:       String(p.text       ?? ""),
+        visibility: String(p.visibility ?? "PUBLIC"),
+      };
     }
 
     states[action.index] = {
@@ -226,6 +246,18 @@ function getRequiredFieldErrors(actionType: ActionType, saved: Record<string, st
     if (!saved.title?.trim()) e.title = "Title is required.";
   }
 
+  if (actionType === "CREATE_FACEBOOK_POST") {
+    if (!saved.message?.trim()) e.message = "Message is required.";
+    if (saved.link?.trim() && !/^https?:\/\/.+/.test(saved.link.trim())) e.link = "Must start with http:// or https://";
+    if (saved.published?.trim() && !["true", "false"].includes(saved.published.trim().toLowerCase())) e.published = "Must be true or false.";
+  }
+
+  if (actionType === "CREATE_LINKEDIN_POST") {
+    if (!saved.text?.trim()) e.text = "Post text is required.";
+    else if (saved.text.length > 3000) e.text = "Post text must be under 3,000 characters.";
+    if (saved.visibility?.trim() && !["PUBLIC", "CONNECTIONS"].includes(saved.visibility.trim())) e.visibility = "Must be PUBLIC or CONNECTIONS.";
+  }
+
   return e;
 }
 
@@ -239,6 +271,8 @@ function confirmButtonLabel(plan: ActionPlanDetail): string {
       case "READ_EMAIL":                return "Fetch Emails";
       case "CREATE_CALENDAR_EVENT":     return "Create Event";
       case "RESCHEDULE_CALENDAR_EVENT": return "Reschedule Event";
+      case "CREATE_FACEBOOK_POST":      return "Post to Facebook";
+      case "CREATE_LINKEDIN_POST":      return "Post to LinkedIn";
     }
   }
   if (plan.riskLevel === "HIGH")   return "Review & Confirm";
@@ -260,6 +294,10 @@ function payloadSummary(type: ActionType, payload: Record<string, unknown>): str
     case "CREATE_CALENDAR_EVENT":
     case "RESCHEDULE_CALENDAR_EVENT":
       return [p.title && `"${p.title}"`, p.startTime && new Date(p.startTime).toLocaleString()].filter(Boolean).join(" · ");
+    case "CREATE_FACEBOOK_POST":
+      return p.message ? `"${p.message.slice(0, 60)}${p.message.length > 60 ? "…" : ""}"` : "";
+    case "CREATE_LINKEDIN_POST":
+      return p.text ? `"${p.text.slice(0, 60)}${p.text.length > 60 ? "…" : ""}"` : "";
     default:
       return "";
   }
@@ -572,6 +610,155 @@ function CalendarPayloadEditor({
   return null;
 }
 
+// Editable Facebook post payload form.
+function FacebookPayloadEditor({
+  edits,
+  errors,
+  savingFields,
+  locked,
+  onChange,
+  onBlur,
+}: {
+  edits: Record<string, string>;
+  errors: Record<string, string>;
+  savingFields: Record<string, boolean>;
+  locked: boolean;
+  onChange: (field: string, value: string) => void;
+  onBlur: (field: string) => void;
+}) {
+  const fieldLabel = (name: string, label: string, required?: boolean) => (
+    <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
+      {label}
+      {required && <span className="text-destructive">*</span>}
+      {savingFields[name] && <Loader2 className="h-3 w-3 animate-spin" />}
+    </Label>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        {fieldLabel("message", "Message", true)}
+        <Textarea
+          value={edits.message ?? ""}
+          onChange={e => onChange("message", e.target.value)}
+          onBlur={() => onBlur("message")}
+          disabled={locked}
+          placeholder="What's on your mind?"
+          className={`min-h-[80px] text-sm resize-none ${errors.message ? "border-destructive" : ""}`}
+        />
+        {errors.message && <p className="text-xs text-destructive">{errors.message}</p>}
+      </div>
+      <div className="space-y-1.5">
+        {fieldLabel("pageId", "Page ID")}
+        <Input
+          value={edits.pageId ?? ""}
+          onChange={e => onChange("pageId", e.target.value)}
+          onBlur={() => onBlur("pageId")}
+          disabled={locked}
+          placeholder="Leave blank to post to personal profile"
+          className="h-8 text-sm"
+        />
+      </div>
+      <div className="space-y-1.5">
+        {fieldLabel("link", "Link URL")}
+        <Input
+          value={edits.link ?? ""}
+          onChange={e => onChange("link", e.target.value)}
+          onBlur={() => onBlur("link")}
+          disabled={locked}
+          placeholder="https://example.com (optional)"
+          className={`h-8 text-sm ${errors.link ? "border-destructive" : ""}`}
+        />
+        {errors.link && <p className="text-xs text-destructive">{errors.link}</p>}
+      </div>
+      <div className="flex items-center gap-3">
+        {fieldLabel("published", "Publish immediately")}
+        <button
+          type="button"
+          disabled={locked}
+          onClick={() => onChange("published", edits.published === "true" ? "false" : "true")}
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
+            edits.published === "false" ? "bg-muted" : "bg-foreground"
+          }`}
+        >
+          <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-background shadow-lg transition-transform ${
+            edits.published === "false" ? "translate-x-0" : "translate-x-4"
+          }`} />
+        </button>
+        <span className="text-xs text-muted-foreground">
+          {edits.published === "false" ? "Draft / scheduled" : "Publish now"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// Editable LinkedIn post payload form.
+function LinkedInPayloadEditor({
+  edits,
+  errors,
+  savingFields,
+  locked,
+  onChange,
+  onBlur,
+}: {
+  edits: Record<string, string>;
+  errors: Record<string, string>;
+  savingFields: Record<string, boolean>;
+  locked: boolean;
+  onChange: (field: string, value: string) => void;
+  onBlur: (field: string) => void;
+}) {
+  const maxChars = 3000;
+  const charCount = edits.text?.length ?? 0;
+  const overLimit = charCount > maxChars;
+
+  const fieldLabel = (name: string, label: string, required?: boolean) => (
+    <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
+      {label}
+      {required && <span className="text-destructive">*</span>}
+      {savingFields[name] && <Loader2 className="h-3 w-3 animate-spin" />}
+    </Label>
+  );
+
+  const selectClass = "h-8 text-sm w-full rounded-md border border-input bg-background px-3 py-1 text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed";
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          {fieldLabel("text", "Post text", true)}
+          <span className={`text-xs ${overLimit ? "text-destructive font-medium" : "text-muted-foreground"}`}>
+            {charCount}/{maxChars}
+          </span>
+        </div>
+        <Textarea
+          value={edits.text ?? ""}
+          onChange={e => onChange("text", e.target.value)}
+          onBlur={() => onBlur("text")}
+          disabled={locked}
+          placeholder="What do you want to share?"
+          className={`min-h-[100px] text-sm resize-none ${errors.text || overLimit ? "border-destructive" : ""}`}
+        />
+        {errors.text && <p className="text-xs text-destructive">{errors.text}</p>}
+      </div>
+      <div className="space-y-1.5">
+        {fieldLabel("visibility", "Audience")}
+        <select
+          value={edits.visibility ?? "PUBLIC"}
+          onChange={e => onChange("visibility", e.target.value)}
+          onBlur={() => onBlur("visibility")}
+          disabled={locked}
+          className={selectClass}
+        >
+          <option value="PUBLIC">Anyone (Public)</option>
+          <option value="CONNECTIONS">Connections only</option>
+        </select>
+      </div>
+    </div>
+  );
+}
+
 // Editable task payload form (CREATE_TASK and UPDATE_TASK).
 function TaskPayloadEditor({
   action,
@@ -730,7 +917,9 @@ function EditableActionCard({
     action.provider === "GMAIL" ||
     action.provider === "GOOGLE_CALENDAR" ||
     action.type === "CREATE_TASK" ||
-    action.type === "UPDATE_TASK";
+    action.type === "UPDATE_TASK" ||
+    action.type === "CREATE_FACEBOOK_POST" ||
+    action.type === "CREATE_LINKEDIN_POST";
   if (!isEditable) return <ActionCard action={action} />;
 
   const meta = ACTION_META[action.type];
@@ -796,6 +985,26 @@ function EditableActionCard({
           onBlur={onFieldBlur}
         />
       )}
+      {action.type === "CREATE_FACEBOOK_POST" && (
+        <FacebookPayloadEditor
+          edits={state.payload}
+          errors={state.fieldErrors}
+          savingFields={state.savingFields}
+          locked={locked}
+          onChange={onFieldChange}
+          onBlur={onFieldBlur}
+        />
+      )}
+      {action.type === "CREATE_LINKEDIN_POST" && (
+        <LinkedInPayloadEditor
+          edits={state.payload}
+          errors={state.fieldErrors}
+          savingFields={state.savingFields}
+          locked={locked}
+          onChange={onFieldChange}
+          onBlur={onFieldBlur}
+        />
+      )}
     </div>
   );
 }
@@ -814,6 +1023,12 @@ function ActionResultCard({
   const Icon = meta?.icon;
   const ok = result.status === "SUCCESS";
   const credentialError = result.errorCode === "NO_CREDENTIALS" || result.errorCode === "TOKEN_EXPIRED";
+  const reconnectLabel =
+    action.provider === "GMAIL" ? "Reconnect Gmail" :
+    action.provider === "GOOGLE_CALENDAR" ? "Reconnect Google Calendar" :
+    action.provider === "FACEBOOK" ? "Reconnect Facebook" :
+    action.provider === "LINKEDIN" ? "Reconnect LinkedIn" :
+    "Reconnect";
 
   return (
     <div className="rounded-lg border border-border p-4 space-y-2.5">
@@ -923,6 +1138,14 @@ function ActionResultCard({
               </div>
             );
           })()}
+
+          {(action.type === "CREATE_FACEBOOK_POST" || action.type === "CREATE_LINKEDIN_POST") && result.link && (
+            <a href={result.link} target="_blank" rel="noopener noreferrer"
+               className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+              <ExternalLink className="h-3.5 w-3.5" />
+              View Post
+            </a>
+          )}
         </>
       )}
 
@@ -941,7 +1164,7 @@ function ActionResultCard({
 
           {credentialError && (
             <Button variant="outline" size="sm" onClick={onGoToSettings} className="text-xs h-7">
-              {action.provider === "GMAIL" ? "Reconnect Gmail" : "Reconnect Google Calendar"}
+              {reconnectLabel}
             </Button>
           )}
         </div>
@@ -1258,6 +1481,22 @@ export default function ActionPlansPage() {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handlePreview();
               }}
             />
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { label: "Post to Facebook", value: "Post to my Facebook page: Excited to announce our new feature!" },
+                { label: "Post to LinkedIn", value: "Share on LinkedIn: We're hiring senior engineers — apply now." },
+              ].map(hint => (
+                <button
+                  key={hint.label}
+                  type="button"
+                  disabled={phase.kind === "previewing" || phase.kind === "confirming"}
+                  onClick={() => setInstruction(hint.value)}
+                  className="rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {hint.label}
+                </button>
+              ))}
+            </div>
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-muted-foreground">⌘ Enter to submit</p>
               <div className="flex gap-2">

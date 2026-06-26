@@ -115,8 +115,11 @@ function statusVariant(status: ActionPlanStatus): "default" | "secondary" | "des
     case "CONFIRMED": return "outline";
     case "EXECUTING": return "outline";
     case "SUCCESS": return "default";
+    case "COMPLETED": return "default";
     case "FAILED": return "destructive";
     case "CANCELLED": return "secondary";
+    case "PENDING": return "secondary";
+    case "RUNNING": return "outline";
   }
 }
 
@@ -340,8 +343,7 @@ export default function PlanDetailPage() {
                 </span>
               </div>
               <CardTitle className="text-base font-normal text-muted-foreground mt-2 leading-relaxed">
-                {/* plan.inputText not on ActionPlanDetail — show plan id as fallback */}
-                Plan ID: {plan.actionPlanId}
+                {plan.inputText}
               </CardTitle>
             </CardHeader>
           </Card>

@@ -276,10 +276,13 @@ export interface SpringPage<T> {
 // ── Action plan types ────────────────────────────────────────────────────────
 
 export type ActionPlanStatus =
+  | "PENDING"
   | "DRAFT"
   | "CONFIRMED"
   | "EXECUTING"
+  | "RUNNING"
   | "SUCCESS"
+  | "COMPLETED"
   | "FAILED"
   | "CANCELLED";
 
@@ -293,7 +296,11 @@ export type ActionType =
   | "READ_EMAIL"
   | "TRIGGER_WORKFLOW"
   | "LOG_CRM_ACTIVITY"
-  | "UPDATE_DEAL_STATUS";
+  | "UPDATE_DEAL_STATUS"
+  | "CREATE_FACEBOOK_POST"
+  | "CREATE_LINKEDIN_POST"
+  | "FETCH_AIRTABLE_RECORDS"
+  | "CREATE_AIRTABLE_RECORD";
 
 export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 export type ExecutionEngineType = "N8N" | "DIRECT" | "HYBRID";
@@ -315,6 +322,7 @@ export interface PlanAction {
 
 export interface ActionPlanDetail {
   actionPlanId: string;
+  inputText: string;
   status: ActionPlanStatus;
   riskLevel: RiskLevel;
   explain: ActionExplain;
@@ -476,6 +484,7 @@ export type IntegrationProvider =
   | "TWITTER"
   | "LINKEDIN"
   | "TIKTOK"
+  | "AIRTABLE"
   | "INTERNAL_TASKS";
 
 export type IntegrationStatus = "DISCONNECTED" | "CONNECTED" | "ERROR";

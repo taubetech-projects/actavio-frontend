@@ -26,8 +26,11 @@ function statusVariant(status: ActionPlanStatus): "default" | "secondary" | "des
     case "CONFIRMED": return "outline";
     case "EXECUTING": return "outline";
     case "SUCCESS": return "default";
+    case "COMPLETED": return "default";
     case "FAILED": return "destructive";
     case "CANCELLED": return "secondary";
+    case "PENDING": return "secondary";
+    case "RUNNING": return "outline";
   }
 }
 
