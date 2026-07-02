@@ -14,11 +14,13 @@ export interface FieldEntry {
 interface AirtableDynamicFieldListProps {
   fields: FieldEntry[];
   onChange: (fields: FieldEntry[]) => void;
+  disabled?: boolean;
 }
 
 export function AirtableDynamicFieldList({
   fields,
   onChange,
+  disabled,
 }: AirtableDynamicFieldListProps) {
   const listId = useId();
   const datalistId = `${listId}-fields`;
@@ -56,7 +58,8 @@ export function AirtableDynamicFieldList({
                 onChange={(e) => update(field.id, { key: e.target.value })}
                 list={datalistId}
                 placeholder="e.g. Name"
-                className="flex-1 min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                disabled={disabled}
+                className="flex-1 min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
               />
               <div className="flex-1 min-w-0 relative">
                 <input
@@ -64,7 +67,8 @@ export function AirtableDynamicFieldList({
                   value={field.value}
                   onChange={(e) => update(field.id, { value: e.target.value })}
                   placeholder="e.g. Ada Lovelace"
-                  className="w-full rounded-md border border-input bg-background pl-3 pr-9 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  disabled={disabled}
+                  className="w-full rounded-md border border-input bg-background pl-3 pr-9 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 {valueIsPhone && (
                   <Phone className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-green-600 pointer-events-none" />
@@ -76,7 +80,7 @@ export function AirtableDynamicFieldList({
               <button
                 type="button"
                 onClick={() => remove(field.id)}
-                disabled={fields.length <= 1}
+                disabled={disabled || fields.length <= 1}
                 className="shrink-0 rounded p-1 text-muted-foreground hover:text-destructive disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label="Remove field"
               >

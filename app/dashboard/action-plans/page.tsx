@@ -57,8 +57,10 @@ import type { ExecutionRunResponse, ActionResultResponse } from "@/types/executi
 import { useExecutionResult } from "@/hooks/useExecutionResult";
 import { ExecutionDataRenderer } from "@/components/ExecutionDataRenderer";
 import { AirtableSearchMatchCard } from "@/components/airtable/AirtableSearchMatchCard";
+import { AirtableCreateRecordCard } from "@/components/airtable/AirtableCreateRecordCard";
 import { buildSearchPayload } from "@/lib/airtable/buildSearchPayload";
-import type { AirtableRef, SearchAirtableResolvedPayload } from "@/types/airtable";
+import { buildCreateRecordPayload } from "@/lib/airtable/buildCreateRecordPayload";
+import type { AirtableRef, SearchAirtableResolvedPayload, CreateAirtableResolvedPayload } from "@/types/airtable";
 
 // ── Metadata maps ─────────────────────────────────────────────────────────────
 
@@ -253,6 +255,25 @@ function initAirtableSearchEdits(plan: ActionPlanDetail): Record<number, SearchA
       pageSize: typeof p.pageSize === "number" ? p.pageSize : 20,
       offset: typeof p.offset === "string" ? p.offset : null,
       filterByFormula: typeof p.filterByFormula === "string" ? p.filterByFormula : null,
+    };
+  }
+  return states;
+}
+
+// Seeds per-action editable state for CREATE_AIRTABLE_RECORD from the resolved payload
+// the preview endpoint returns (selectedBase/selectedTable + the available lists + fields).
+function initAirtableCreateEdits(plan: ActionPlanDetail): Record<number, CreateAirtableResolvedPayload> {
+  const states: Record<number, CreateAirtableResolvedPayload> = {};
+  for (const action of plan.actions) {
+    if (action.type !== "CREATE_AIRTABLE_RECORD") continue;
+    const p = action.payload as Record<string, unknown>;
+    const fields = p.fields && typeof p.fields === "object" ? (p.fields as Record<string, unknown>) : {};
+    states[action.index] = {
+      fields,
+      selectedBase: coerceAirtableRef(p.selectedBase),
+      selectedTable: coerceAirtableRef(p.selectedTable),
+      allAvailableBases: coerceAirtableRefList(p.allAvailableBases),
+      allAvailableTablesForSelectedBase: coerceAirtableRefList(p.allAvailableTablesForSelectedBase),
     };
   }
   return states;
@@ -941,7 +962,7 @@ function TaskPayloadEditor({
   return null;
 }
 
-// Expanded card with editable payload for Gmail, Calendar, Task, and Airtable search actions.
+// Expanded card with editable payload for Gmail, Calendar, Task, and Airtable actions.
 function EditableActionCard({
   action,
   state,
@@ -951,6 +972,8 @@ function EditableActionCard({
   explain,
   airtableSearchPayload,
   onAirtableSearchChange,
+  airtableCreatePayload,
+  onAirtableCreateChange,
 }: {
   action: ActionPlanDetail["actions"][number];
   state: ActionEditState;
@@ -960,6 +983,8 @@ function EditableActionCard({
   explain: ActionPlanDetail["explain"];
   airtableSearchPayload?: SearchAirtableResolvedPayload;
   onAirtableSearchChange: (next: SearchAirtableResolvedPayload) => void;
+  airtableCreatePayload?: CreateAirtableResolvedPayload;
+  onAirtableCreateChange: (next: CreateAirtableResolvedPayload) => void;
 }) {
   const isEditable =
     action.provider === "GMAIL" ||
@@ -968,7 +993,8 @@ function EditableActionCard({
     action.type === "UPDATE_TASK" ||
     action.type === "CREATE_FACEBOOK_POST" ||
     action.type === "CREATE_LINKEDIN_POST" ||
-    (action.type === "SEARCH_AIRTABLE_RECORDS" && !!airtableSearchPayload);
+    (action.type === "SEARCH_AIRTABLE_RECORDS" && !!airtableSearchPayload) ||
+    (action.type === "CREATE_AIRTABLE_RECORD" && !!airtableCreatePayload);
   if (!isEditable) return <ActionCard action={action} />;
 
   const meta = ACTION_META[action.type as ActionType];
@@ -1061,6 +1087,15 @@ function EditableActionCard({
           triggers={explain.triggers}
           locked={locked}
           onChange={onAirtableSearchChange}
+        />
+      )}
+      {action.type === "CREATE_AIRTABLE_RECORD" && airtableCreatePayload && (
+        <AirtableCreateRecordCard
+          payload={airtableCreatePayload}
+          confidence={explain.confidence}
+          triggers={explain.triggers}
+          locked={locked}
+          onChange={onAirtableCreateChange}
         />
       )}
     </div>
@@ -1263,7 +1298,7 @@ function ExplainSection({ explain }: { explain: ActionPlanDetail["explain"] }) {
               <div className="flex flex-wrap gap-2">
                 {explain.triggers.map((t, i) => (
                   <span key={i} className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-                    {t.phrase} → {t.maps_to?.replace(/_/g, " ")}
+                    {t.phrase} → {(t.maps_to ?? t.meaning ?? "").replace(/_/g, " ")}
                   </span>
                 ))}
               </div>
@@ -1331,6 +1366,8 @@ export default function ActionPlansPage() {
   const [actionStates, setActionStates] = useState<AllActionEditStates>({});
   const [airtableSearchEdits, setAirtableSearchEdits] = useState<Record<number, SearchAirtableResolvedPayload>>({});
   const airtableSearchOriginal = useRef<Record<number, SearchAirtableResolvedPayload>>({});
+  const [airtableCreateEdits, setAirtableCreateEdits] = useState<Record<number, CreateAirtableResolvedPayload>>({});
+  const airtableCreateOriginal = useRef<Record<number, CreateAirtableResolvedPayload>>({});
   const [planLocked, setPlanLocked] = useState(false);
   const [instruction, setInstruction] = useState("");
   const [history, setHistory] = useState<ActionPlanSummary[]>([]);
@@ -1415,6 +1452,10 @@ export default function ActionPlansPage() {
         const edit = airtableSearchEdits[action.index];
         return !!edit && !!edit.selectedBase && !!edit.selectedTable;
       }
+      if (action.type === "CREATE_AIRTABLE_RECORD") {
+        const edit = airtableCreateEdits[action.index];
+        return !!edit && !!edit.selectedBase && !!edit.selectedTable;
+      }
       const state = actionStates[action.index];
       if (!state) return true;
       if (Object.values(state.savingFields).some(Boolean)) return false;
@@ -1434,6 +1475,9 @@ export default function ActionPlansPage() {
       const airtableEdits = initAirtableSearchEdits(plan);
       setAirtableSearchEdits(airtableEdits);
       airtableSearchOriginal.current = airtableEdits;
+      const airtableCreateEditsInit = initAirtableCreateEdits(plan);
+      setAirtableCreateEdits(airtableCreateEditsInit);
+      airtableCreateOriginal.current = airtableCreateEditsInit;
       setPlanLocked(false);
     } catch (err: unknown) {
       setPhase({ kind: "error", message: err instanceof Error ? err.message : "Preview failed." });
@@ -1530,11 +1574,17 @@ export default function ActionPlansPage() {
     setPhase({ kind: "confirming", plan });
     try {
       for (const action of plan.actions) {
-        if (action.type !== "SEARCH_AIRTABLE_RECORDS") continue;
-        const edited = airtableSearchEdits[action.index];
-        const original = airtableSearchOriginal.current[action.index];
-        if (!edited || JSON.stringify(edited) === JSON.stringify(original)) continue;
-        await actionPlansApi.updatePayload(plan.actionPlanId, action.index, buildSearchPayload(edited));
+        if (action.type === "SEARCH_AIRTABLE_RECORDS") {
+          const edited = airtableSearchEdits[action.index];
+          const original = airtableSearchOriginal.current[action.index];
+          if (!edited || JSON.stringify(edited) === JSON.stringify(original)) continue;
+          await actionPlansApi.updatePayload(plan.actionPlanId, action.index, buildSearchPayload(edited));
+        } else if (action.type === "CREATE_AIRTABLE_RECORD") {
+          const edited = airtableCreateEdits[action.index];
+          const original = airtableCreateOriginal.current[action.index];
+          if (!edited || JSON.stringify(edited) === JSON.stringify(original)) continue;
+          await actionPlansApi.updatePayload(plan.actionPlanId, action.index, buildCreateRecordPayload(edited));
+        }
       }
       await actionPlansApi.confirm(plan.actionPlanId);
       setPhase({ kind: "executing", plan });
@@ -1669,6 +1719,10 @@ export default function ActionPlansPage() {
                     airtableSearchPayload={airtableSearchEdits[action.index]}
                     onAirtableSearchChange={(next) =>
                       setAirtableSearchEdits(prev => ({ ...prev, [action.index]: next }))
+                    }
+                    airtableCreatePayload={airtableCreateEdits[action.index]}
+                    onAirtableCreateChange={(next) =>
+                      setAirtableCreateEdits(prev => ({ ...prev, [action.index]: next }))
                     }
                   />
                 ))}

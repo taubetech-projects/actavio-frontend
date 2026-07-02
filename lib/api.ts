@@ -309,7 +309,9 @@ export type ExecutionEngineType = "N8N" | "DIRECT" | "HYBRID";
 
 export interface ActionExplain {
   confidence: "HIGH" | "MEDIUM" | "LOW";
-  triggers: Array<{ phrase: string; maps_to: string }>;
+  // Older triggers use `maps_to`; the Airtable base/table resolver appends its own
+  // entries using `meaning` instead — both are seen in the wild, so accept either.
+  triggers: Array<{ phrase: string; maps_to?: string; meaning?: string }>;
   defaults: Array<{ field: string; value: string }>;
   willNot: string[];
 }

@@ -120,3 +120,15 @@ export interface SearchAirtableResolvedPayload {
   offset?: string | null;
   filterByFormula?: string | null;
 }
+
+// ── Create-record resolution (action-plan preview payload correction) ──────────
+
+export interface CreateAirtableResolvedPayload {
+  fields: Record<string, unknown>;
+  selectedBase: AirtableRef | null;
+  selectedTable: AirtableRef | null;
+  allAvailableBases: AirtableRef[];
+  allAvailableTablesForSelectedBase: AirtableRef[];
+  baseId?: string;
+  tableId?: string;
+}
