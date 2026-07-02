@@ -56,6 +56,9 @@ import {
 import type { ExecutionRunResponse, ActionResultResponse } from "@/types/execution";
 import { useExecutionResult } from "@/hooks/useExecutionResult";
 import { ExecutionDataRenderer } from "@/components/ExecutionDataRenderer";
+import { AirtableSearchMatchCard } from "@/components/airtable/AirtableSearchMatchCard";
+import { buildSearchPayload } from "@/lib/airtable/buildSearchPayload";
+import type { AirtableRef, SearchAirtableResolvedPayload } from "@/types/airtable";
 
 // ── Metadata maps ─────────────────────────────────────────────────────────────
 
@@ -217,6 +220,39 @@ function initActionStates(plan: ActionPlanDetail): AllActionEditStates {
       fieldErrors: {},
       savingFields: {},
       showSaved: false,
+    };
+  }
+  return states;
+}
+
+function coerceAirtableRef(value: unknown): AirtableRef | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.id !== "string" || typeof v.name !== "string") return null;
+  return { id: v.id, name: v.name };
+}
+
+function coerceAirtableRefList(value: unknown): AirtableRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(coerceAirtableRef).filter((r): r is AirtableRef => r !== null);
+}
+
+// Seeds per-action editable state for SEARCH_AIRTABLE_RECORDS from the resolved payload
+// the preview endpoint returns (selectedBase/selectedTable + the available lists).
+function initAirtableSearchEdits(plan: ActionPlanDetail): Record<number, SearchAirtableResolvedPayload> {
+  const states: Record<number, SearchAirtableResolvedPayload> = {};
+  for (const action of plan.actions) {
+    if (action.type !== "SEARCH_AIRTABLE_RECORDS") continue;
+    const p = action.payload as Record<string, unknown>;
+    states[action.index] = {
+      selectedBase: coerceAirtableRef(p.selectedBase),
+      selectedTable: coerceAirtableRef(p.selectedTable),
+      searchQuery: typeof p.searchQuery === "string" ? p.searchQuery : "",
+      allAvailableBases: coerceAirtableRefList(p.allAvailableBases),
+      allAvailableTablesForSelectedBase: coerceAirtableRefList(p.allAvailableTablesForSelectedBase),
+      pageSize: typeof p.pageSize === "number" ? p.pageSize : 20,
+      offset: typeof p.offset === "string" ? p.offset : null,
+      filterByFormula: typeof p.filterByFormula === "string" ? p.filterByFormula : null,
     };
   }
   return states;
@@ -905,19 +941,25 @@ function TaskPayloadEditor({
   return null;
 }
 
-// Expanded card with editable payload for Gmail, Calendar, and Task actions.
+// Expanded card with editable payload for Gmail, Calendar, Task, and Airtable search actions.
 function EditableActionCard({
   action,
   state,
   locked,
   onFieldChange,
   onFieldBlur,
+  explain,
+  airtableSearchPayload,
+  onAirtableSearchChange,
 }: {
   action: ActionPlanDetail["actions"][number];
   state: ActionEditState;
   locked: boolean;
   onFieldChange: (field: string, value: string) => void;
   onFieldBlur: (field: string) => void;
+  explain: ActionPlanDetail["explain"];
+  airtableSearchPayload?: SearchAirtableResolvedPayload;
+  onAirtableSearchChange: (next: SearchAirtableResolvedPayload) => void;
 }) {
   const isEditable =
     action.provider === "GMAIL" ||
@@ -925,7 +967,8 @@ function EditableActionCard({
     action.type === "CREATE_TASK" ||
     action.type === "UPDATE_TASK" ||
     action.type === "CREATE_FACEBOOK_POST" ||
-    action.type === "CREATE_LINKEDIN_POST";
+    action.type === "CREATE_LINKEDIN_POST" ||
+    (action.type === "SEARCH_AIRTABLE_RECORDS" && !!airtableSearchPayload);
   if (!isEditable) return <ActionCard action={action} />;
 
   const meta = ACTION_META[action.type as ActionType];
@@ -1009,6 +1052,15 @@ function EditableActionCard({
           locked={locked}
           onChange={onFieldChange}
           onBlur={onFieldBlur}
+        />
+      )}
+      {action.type === "SEARCH_AIRTABLE_RECORDS" && airtableSearchPayload && (
+        <AirtableSearchMatchCard
+          payload={airtableSearchPayload}
+          confidence={explain.confidence}
+          triggers={explain.triggers}
+          locked={locked}
+          onChange={onAirtableSearchChange}
         />
       )}
     </div>
@@ -1277,6 +1329,8 @@ export default function ActionPlansPage() {
 
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [actionStates, setActionStates] = useState<AllActionEditStates>({});
+  const [airtableSearchEdits, setAirtableSearchEdits] = useState<Record<number, SearchAirtableResolvedPayload>>({});
+  const airtableSearchOriginal = useRef<Record<number, SearchAirtableResolvedPayload>>({});
   const [planLocked, setPlanLocked] = useState(false);
   const [instruction, setInstruction] = useState("");
   const [history, setHistory] = useState<ActionPlanSummary[]>([]);
@@ -1357,6 +1411,10 @@ export default function ActionPlansPage() {
 
   const canConfirm = !planLocked && draftPlan !== null &&
     draftPlan.actions.every(action => {
+      if (action.type === "SEARCH_AIRTABLE_RECORDS") {
+        const edit = airtableSearchEdits[action.index];
+        return !!edit && !!edit.selectedBase && !!edit.selectedTable;
+      }
       const state = actionStates[action.index];
       if (!state) return true;
       if (Object.values(state.savingFields).some(Boolean)) return false;
@@ -1373,6 +1431,9 @@ export default function ActionPlansPage() {
       const plan = await actionPlansApi.preview(instruction.trim());
       setPhase({ kind: "draft", plan });
       setActionStates(initActionStates(plan));
+      const airtableEdits = initAirtableSearchEdits(plan);
+      setAirtableSearchEdits(airtableEdits);
+      airtableSearchOriginal.current = airtableEdits;
       setPlanLocked(false);
     } catch (err: unknown) {
       setPhase({ kind: "error", message: err instanceof Error ? err.message : "Preview failed." });
@@ -1468,9 +1529,22 @@ export default function ActionPlansPage() {
   async function executeConfirm(plan: ActionPlanDetail) {
     setPhase({ kind: "confirming", plan });
     try {
+      for (const action of plan.actions) {
+        if (action.type !== "SEARCH_AIRTABLE_RECORDS") continue;
+        const edited = airtableSearchEdits[action.index];
+        const original = airtableSearchOriginal.current[action.index];
+        if (!edited || JSON.stringify(edited) === JSON.stringify(original)) continue;
+        await actionPlansApi.updatePayload(plan.actionPlanId, action.index, buildSearchPayload(edited));
+      }
       await actionPlansApi.confirm(plan.actionPlanId);
       setPhase({ kind: "executing", plan });
     } catch (err: unknown) {
+      const e = err as { code?: string };
+      if (e.code === "CONFLICT") {
+        setPlanLocked(true);
+        setPhase({ kind: "draft", plan });
+        return;
+      }
       setPhase({ kind: "error", message: err instanceof Error ? err.message : "Confirm failed." });
     }
   }
@@ -1591,6 +1665,11 @@ export default function ActionPlansPage() {
                     locked={planLocked}
                     onFieldChange={(field, value) => handleFieldChange(action.index, field, value)}
                     onFieldBlur={(field) => handleFieldBlur(phase.plan.actionPlanId, action.index, field)}
+                    explain={phase.plan.explain}
+                    airtableSearchPayload={airtableSearchEdits[action.index]}
+                    onAirtableSearchChange={(next) =>
+                      setAirtableSearchEdits(prev => ({ ...prev, [action.index]: next }))
+                    }
                   />
                 ))}
               </div>

@@ -99,3 +99,24 @@ export interface PlanExecutionResult {
   messageUser: string | null;
   status: "SUCCESS" | "FAILED";
 }
+
+// ── Search-intent resolution (action-plan preview payload correction) ──────────
+
+export interface AirtableRef {
+  id: string;
+  name: string;
+}
+
+export interface SearchAirtableResolvedPayload {
+  selectedBase: AirtableRef | null;
+  selectedTable: AirtableRef | null;
+  searchQuery: string;
+  allAvailableBases: AirtableRef[];
+  allAvailableTablesForSelectedBase: AirtableRef[];
+  baseId?: string;
+  tableId?: string;
+  searchText?: string;
+  pageSize?: number;
+  offset?: string | null;
+  filterByFormula?: string | null;
+}

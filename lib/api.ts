@@ -434,7 +434,7 @@ export const actionPlansApi = {
       method: "POST",
     }),
 
-  updatePayload: (planId: string, actionIndex: number, payload: Record<string, string>) =>
+  updatePayload: (planId: string, actionIndex: number, payload: Record<string, unknown>) =>
     apiFetch<ActionPayloadResponse>(
       `/api/v1/action-plans/${planId}/actions/${actionIndex}/payload`,
       { method: "PATCH", body: JSON.stringify({ payload }) }
