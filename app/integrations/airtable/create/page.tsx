@@ -2,9 +2,10 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, AlertCircle, CheckCircle2, X, Plus, ChevronLeft, ExternalLink } from "lucide-react";
+import {
+  Loader2, AlertCircle, CheckCircle2, X, Plus, ChevronLeft, ExternalLink, PenLine,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import DashboardLayout from "@/components/dashboard/dashboard-layout";
@@ -14,6 +15,8 @@ import {
   type FieldEntry,
 } from "@/components/airtable/AirtableDynamicFieldList";
 import { AirtableRecordsTable } from "@/components/airtable/AirtableRecordsTable";
+import { AirtableBaseSelector } from "@/components/airtable/AirtableBaseSelector";
+import { AirtableTableSelector } from "@/components/airtable/AirtableTableSelector";
 import { useAirtableCreate } from "@/hooks/useAirtableCreate";
 import { useAirtableIntegration } from "@/hooks/useAirtableIntegration";
 import { useAuth } from "@/lib/auth-context";
@@ -28,12 +31,10 @@ export default function AirtableCreatePage() {
   const router = useRouter();
   const { isConnected, isLoading: integrationLoading } = useAirtableIntegration();
 
-  // Phase 1: target selection
   const [phase, setPhase] = useState<1 | 2>(1);
   const [baseId, setBaseId] = useState("");
   const [tableId, setTableId] = useState("");
 
-  // Phase 2: field builder
   const [fields, setFields] = useState<FieldEntry[]>([makeEntry(), makeEntry()]);
   const [dismissedError, setDismissedError] = useState(false);
 
@@ -49,6 +50,11 @@ export default function AirtableCreatePage() {
       setTimeout(() => successRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     }
   }, [result]);
+
+  const handleBaseChange = (id: string) => {
+    setBaseId(id);
+    setTableId("");
+  };
 
   const handleContinue = () => {
     if (baseId.trim() && tableId.trim()) setPhase(2);
@@ -71,6 +77,13 @@ export default function AirtableCreatePage() {
     setDismissedError(false);
   };
 
+  const handleStartOver = () => {
+    handleReset();
+    setPhase(1);
+    setBaseId("");
+    setTableId("");
+  };
+
   if (!initialized || !user) return null;
 
   const notConnectedGate = !integrationLoading && !isConnected;
@@ -80,21 +93,29 @@ export default function AirtableCreatePage() {
   return (
     <DashboardLayout>
       <div className="mx-auto max-w-2xl px-4 py-8 space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Create Airtable Record</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Add a new record to any base and table.
-          </p>
+        {/* Header */}
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+            <PenLine className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Create Airtable Record</h1>
+            <p className="text-muted-foreground text-sm">
+              Add a new record to any base and table.
+            </p>
+          </div>
         </div>
 
         {notConnectedGate && (
-          <div className="rounded-lg border border-orange-200 bg-orange-50 p-4 flex items-start gap-3">
+          <div className="rounded-lg border border-orange-200 bg-orange-50 dark:border-orange-900/40 dark:bg-orange-950/20 p-4 flex items-start gap-3">
             <AlertCircle className="h-5 w-5 text-orange-600 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-orange-800">Airtable not connected</p>
-              <p className="text-xs text-orange-700 mt-1">
+              <p className="text-sm font-medium text-orange-800 dark:text-orange-400">
+                Airtable not connected
+              </p>
+              <p className="text-xs text-orange-700 dark:text-orange-500 mt-1">
                 Connect your Airtable account first.{" "}
-                <a href="/integrations" className="underline">
+                <a href="/integrations" className="underline font-medium">
                   Go to Integrations →
                 </a>
               </p>
@@ -105,21 +126,24 @@ export default function AirtableCreatePage() {
         {/* Success state */}
         {result && (
           <div ref={successRef} className="space-y-4">
-            <div className="rounded-lg border border-green-200 bg-green-50 p-4 flex items-start gap-3">
-              <CheckCircle2 className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
-              <div className="flex-1 space-y-1">
-                <p className="text-sm font-medium text-green-800">
+            <div className="rounded-lg border border-green-200 bg-green-50 dark:border-green-900/40 dark:bg-green-950/20 p-4 flex items-start gap-3">
+              <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400 shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-1.5">
+                <p className="text-sm font-semibold text-green-800 dark:text-green-300">
                   Record created successfully
                 </p>
-                <p className="text-xs text-green-700">
-                  Record ID: <span className="font-mono">{result.record.id}</span>
+                <p className="text-xs text-green-700 dark:text-green-400">
+                  Record ID:{" "}
+                  <span className="font-mono bg-green-100 dark:bg-green-900/40 rounded px-1">
+                    {result.record.id}
+                  </span>
                 </p>
                 {resultLink && (
                   <a
                     href={resultLink}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-green-700 underline hover:text-green-900"
+                    className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-400 underline hover:text-green-900 dark:hover:text-green-200"
                   >
                     <ExternalLink className="h-3 w-3" />
                     View in Airtable
@@ -130,57 +154,65 @@ export default function AirtableCreatePage() {
 
             <AirtableRecordsTable records={[result.record]} />
 
-            <Button variant="outline" size="sm" onClick={handleReset}>
-              Create another record
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={handleReset}>
+                Create another record
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleStartOver}>
+                Change base / table
+              </Button>
+            </div>
           </div>
         )}
 
         {/* Form */}
         {!result && (
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base">
-                {phase === 1 ? "Select Target" : (
-                  <span className="flex items-center gap-2">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                {phase === 2 ? (
+                  <>
                     <button
                       type="button"
                       onClick={() => setPhase(1)}
-                      className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                      className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded transition-colors"
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </button>
                     <span className="text-sm font-normal text-muted-foreground">
-                      <span className="font-mono text-foreground">{baseId}</span>
-                      {" › "}
-                      <span className="font-mono text-foreground">{tableId}</span>
+                      <span className="font-mono text-xs bg-muted rounded px-1.5 py-0.5 text-foreground">
+                        {baseId}
+                      </span>
+                      <span className="mx-1.5 text-muted-foreground">›</span>
+                      <span className="font-mono text-xs bg-muted rounded px-1.5 py-0.5 text-foreground">
+                        {tableId}
+                      </span>
                     </span>
-                  </span>
+                  </>
+                ) : (
+                  "Select Target"
                 )}
               </CardTitle>
             </CardHeader>
+
             <CardContent className="space-y-4">
               {phase === 1 && (
                 <>
                   <div className="space-y-1.5">
-                    <Label htmlFor="createBaseId">Base ID</Label>
-                    <Input
-                      id="createBaseId"
+                    <Label>Base</Label>
+                    <AirtableBaseSelector
                       value={baseId}
-                      onChange={(e) => setBaseId(e.target.value)}
-                      placeholder="appAbc123XYZ"
+                      onChange={handleBaseChange}
                       disabled={notConnectedGate}
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="createTableId">Table ID / Table Name</Label>
-                    <Input
-                      id="createTableId"
+                    <Label>Table</Label>
+                    <AirtableTableSelector
+                      baseId={baseId || null}
                       value={tableId}
-                      onChange={(e) => setTableId(e.target.value)}
-                      placeholder="tblCustomers or Customers"
+                      onChange={setTableId}
                       disabled={notConnectedGate}
-                      onKeyDown={(e) => e.key === "Enter" && handleContinue()}
                     />
                   </div>
                   <Button
@@ -207,7 +239,6 @@ export default function AirtableCreatePage() {
                     Add Field
                   </Button>
 
-                  {/* Error banner */}
                   {error && !dismissedError && (
                     <CreateErrorBanner
                       error={error}
@@ -226,7 +257,7 @@ export default function AirtableCreatePage() {
                       {isLoading ? "Creating…" : "Create Record"}
                     </Button>
                     <Button variant="ghost" onClick={handleReset} disabled={isLoading}>
-                      Reset
+                      Reset Fields
                     </Button>
                   </div>
                 </>
@@ -248,11 +279,11 @@ function CreateErrorBanner({
   onDismiss: () => void;
   onRetry: () => void;
 }) {
-  const isTokenExpired = error.toLowerCase().includes("token_expired") || error.toLowerCase().includes("expired");
-  const isRateLimit = error.toLowerCase().includes("rate");
+  const isTokenExpired = /TOKEN_EXPIRED|token.expired|expired/i.test(error);
+  const isRateLimit = /rate.limit|rate_limit|RATE_LIMITED/i.test(error);
 
   return (
-    <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 flex items-start gap-3">
+    <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 flex items-start gap-3">
       <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
       <div className="flex-1 space-y-2">
         {isTokenExpired ? (

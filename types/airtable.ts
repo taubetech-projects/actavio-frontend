@@ -60,6 +60,44 @@ export interface AirtableCreateResult {
   record: AirtableRecord;
 }
 
+// ── Search records ────────────────────────────────────────────────────────────
+
+export interface SearchAirtablePayload {
+  baseId: string;
+  tableId: string;
+  searchText: string;
+  pageSize?: number;
+  offset?: string | null;
+}
+
+export interface AirtableSearchResult extends AirtableRecordsResult {
+  searchText: string;
+}
+
+// ── Metadata: bases & tables ──────────────────────────────────────────────────
+
+export interface AirtableBaseItem {
+  id: string;
+  name: string;
+  permissionLevel: string | null;
+}
+
+export interface AirtableBasesResponse {
+  bases: AirtableBaseItem[];
+  baseCount: number;
+}
+
+export interface AirtableTableItem {
+  id: string;
+  name: string;
+}
+
+export interface AirtableTablesResponse {
+  baseId: string;
+  tables: AirtableTableItem[];
+  tableCount: number;
+}
+
 // ── Plan execution result ─────────────────────────────────────────────────────
 
 export interface PlanExecutionResult {

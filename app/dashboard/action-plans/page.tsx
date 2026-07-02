@@ -74,6 +74,9 @@ const ACTION_META: Record<ActionType, { label: string; icon: React.ElementType }
   CREATE_LINKEDIN_POST:      { label: "Post to LinkedIn",          icon: LinkedIn },
   FETCH_AIRTABLE_RECORDS:    { label: "Fetch Airtable records",    icon: BarChart2 },
   CREATE_AIRTABLE_RECORD:    { label: "Create Airtable record",    icon: Edit },
+  SEARCH_AIRTABLE_RECORDS:   { label: "Search Airtable records",   icon: BarChart2 },
+  LIST_AIRTABLE_BASES:       { label: "List Airtable bases",       icon: BarChart2 },
+  LIST_AIRTABLE_TABLES:      { label: "List Airtable tables",      icon: BarChart2 },
 };
 
 const RISK_STYLE: Record<RiskLevel, { badge: string; label: string }> = {
@@ -321,8 +324,8 @@ function RiskBadge({ level }: { level: RiskLevel }) {
 
 // Read-only card for non-editable action types and the result phase.
 function ActionCard({ action }: { action: ActionPlanDetail["actions"][number] }) {
-  const meta = ACTION_META[action.type];
-  const Icon = meta?.icon;
+  const meta = ACTION_META[action.type as ActionType];
+  const Icon = meta?.icon ?? Zap;
   const summary = payloadSummary(action.type, action.payload);
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border p-3">
@@ -927,8 +930,8 @@ function EditableActionCard({
     action.type === "CREATE_LINKEDIN_POST";
   if (!isEditable) return <ActionCard action={action} />;
 
-  const meta = ACTION_META[action.type];
-  const Icon = meta?.icon;
+  const meta = ACTION_META[action.type as ActionType];
+  const Icon = meta?.icon ?? Zap;
   const isSaving = Object.values(state.savingFields).some(Boolean);
   const hasErrors = Object.values(state.fieldErrors).some(Boolean);
 
@@ -1024,8 +1027,8 @@ function ActionResultCard({
   result: ActionResultResponse;
   onGoToSettings: () => void;
 }) {
-  const meta = ACTION_META[action.type];
-  const Icon = meta?.icon;
+  const meta = ACTION_META[action.type as ActionType];
+  const Icon = meta?.icon ?? Zap;
   const ok = result.status === "SUCCESS";
   const credentialError = result.errorCode === "NO_CREDENTIALS" || result.errorCode === "TOKEN_EXPIRED";
   const reconnectLabel =
@@ -1152,7 +1155,7 @@ function ActionResultCard({
             </a>
           )}
 
-          {(action.type === "FETCH_AIRTABLE_RECORDS" || action.type === "CREATE_AIRTABLE_RECORD") && (
+          {(action.type === "FETCH_AIRTABLE_RECORDS" || action.type === "CREATE_AIRTABLE_RECORD" || action.type === "SEARCH_AIRTABLE_RECORDS") && (
             <ExecutionDataRenderer action={result} />
           )}
         </>

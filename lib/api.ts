@@ -300,7 +300,10 @@ export type ActionType =
   | "CREATE_FACEBOOK_POST"
   | "CREATE_LINKEDIN_POST"
   | "FETCH_AIRTABLE_RECORDS"
-  | "CREATE_AIRTABLE_RECORD";
+  | "CREATE_AIRTABLE_RECORD"
+  | "SEARCH_AIRTABLE_RECORDS"
+  | "LIST_AIRTABLE_BASES"
+  | "LIST_AIRTABLE_TABLES";
 
 export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 export type ExecutionEngineType = "N8N" | "DIRECT" | "HYBRID";
@@ -567,6 +570,18 @@ export const settingsApi = {
       method: "PATCH",
       body: JSON.stringify({ engineOverride }),
     }),
+};
+
+// ── Airtable metadata endpoints ───────────────────────────────────────────────
+
+export const airtableMetaApi = {
+  getBases: () =>
+    apiFetch<import("@/types/airtable").AirtableBasesResponse>("/api/v1/airtable/bases"),
+
+  getTables: (baseId: string) =>
+    apiFetch<import("@/types/airtable").AirtableTablesResponse>(
+      `/api/v1/airtable/bases/${encodeURIComponent(baseId)}/tables`
+    ),
 };
 
 // ── Task types ───────────────────────────────────────────────────────────────
