@@ -19,7 +19,7 @@ export function ExecutionDataRenderer({ action }: ExecutionDataRendererProps) {
   const data = action.data;
   if (!data) return null;
 
-  // ── Airtable: FETCH_AIRTABLE_RECORDS ─────────────────────────────────────────
+  // ── Airtable: SEARCH_AIRTABLE_RECORDS ────────────────────────────────────────
   const records = data.records;
   if (Array.isArray(records) && records.length > 0) {
     const airtableRecords = records as AirtableRecord[];

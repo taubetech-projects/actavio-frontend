@@ -72,7 +72,6 @@ const ACTION_META: Record<ActionType, { label: string; icon: React.ElementType }
   UPDATE_DEAL_STATUS:        { label: "Update deal status",        icon: TrendingUp },
   CREATE_FACEBOOK_POST:      { label: "Post to Facebook",          icon: Facebook },
   CREATE_LINKEDIN_POST:      { label: "Post to LinkedIn",          icon: LinkedIn },
-  FETCH_AIRTABLE_RECORDS:    { label: "Fetch Airtable records",    icon: BarChart2 },
   CREATE_AIRTABLE_RECORD:    { label: "Create Airtable record",    icon: Edit },
   SEARCH_AIRTABLE_RECORDS:   { label: "Search Airtable records",   icon: BarChart2 },
   LIST_AIRTABLE_BASES:       { label: "List Airtable bases",       icon: BarChart2 },
@@ -279,7 +278,6 @@ function confirmButtonLabel(plan: ActionPlanDetail): string {
       case "RESCHEDULE_CALENDAR_EVENT": return "Reschedule Event";
       case "CREATE_FACEBOOK_POST":      return "Post to Facebook";
       case "CREATE_LINKEDIN_POST":      return "Post to LinkedIn";
-      case "FETCH_AIRTABLE_RECORDS":    return "Fetch Records";
       case "CREATE_AIRTABLE_RECORD":    return "Create Record";
     }
   }
@@ -1155,7 +1153,7 @@ function ActionResultCard({
             </a>
           )}
 
-          {(action.type === "FETCH_AIRTABLE_RECORDS" || action.type === "CREATE_AIRTABLE_RECORD" || action.type === "SEARCH_AIRTABLE_RECORDS") && (
+          {(action.type === "CREATE_AIRTABLE_RECORD" || action.type === "SEARCH_AIRTABLE_RECORDS") && (
             <ExecutionDataRenderer action={result} />
           )}
         </>

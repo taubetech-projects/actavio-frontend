@@ -28,15 +28,7 @@ export interface AirtableRecord {
   fields: Record<string, AirtableFieldValue>;
 }
 
-// ── Fetch records ─────────────────────────────────────────────────────────────
-
-export interface FetchAirtablePayload {
-  baseId: string;
-  tableId: string;
-  pageSize?: number;
-  offset?: string | null;
-  filterByFormula?: string | null;
-}
+// ── Records result (shared base for search results) ────────────────────────────
 
 export interface AirtableRecordsResult {
   baseId: string;

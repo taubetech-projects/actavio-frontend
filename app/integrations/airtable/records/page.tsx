@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Loader2, AlertCircle, X, RefreshCw, Database, ChevronDown, ChevronUp,
+  Loader2, AlertCircle, X, RefreshCw, Database,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,11 +16,10 @@ import { AirtablePagination } from "@/components/airtable/AirtablePagination";
 import { AirtableBaseSelector } from "@/components/airtable/AirtableBaseSelector";
 import { AirtableTableSelector } from "@/components/airtable/AirtableTableSelector";
 import { AirtableSearchBar } from "@/components/airtable/AirtableSearchBar";
-import { useAirtableFetch } from "@/hooks/useAirtableFetch";
 import { useAirtableSearch } from "@/hooks/useAirtableSearch";
 import { useAirtableIntegration } from "@/hooks/useAirtableIntegration";
 import { useAuth } from "@/lib/auth-context";
-import type { AirtableRecordsResult, AirtableSearchResult } from "@/types/airtable";
+import type { AirtableSearchResult } from "@/types/airtable";
 
 export default function AirtableRecordsPage() {
   const { user, initialized } = useAuth();
@@ -30,16 +29,12 @@ export default function AirtableRecordsPage() {
   const [baseId, setBaseId] = useState("");
   const [tableId, setTableId] = useState("");
   const [pageSize, setPageSize] = useState(20);
-  const [formula, setFormula] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const [fetchResult, setFetchResult] = useState<AirtableRecordsResult | null>(null);
   const [searchResult, setSearchResult] = useState<AirtableSearchResult | null>(null);
   const [activeSearch, setActiveSearch] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [dismissedError, setDismissedError] = useState(false);
 
-  const { fetch, isLoading: fetchLoading, error: fetchError, reset: resetFetch } = useAirtableFetch();
   const { search, isLoading: searchLoading, error: searchError, reset: resetSearch } = useAirtableSearch();
 
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -48,58 +43,12 @@ export default function AirtableRecordsPage() {
     if (initialized && !user) router.replace("/login");
   }, [initialized, user, router]);
 
-  // Reset tableId when base changes
-  const handleBaseChange = useCallback((id: string) => {
+  const handleBaseChange = (id: string) => {
     setBaseId(id);
     setTableId("");
-  }, []);
-
-  const displayedResult = activeSearch ? searchResult : fetchResult;
-  const isLoading = fetchLoading || searchLoading;
-  const error = activeSearch ? searchError : fetchError;
-
-  const handleFetch = async (offset?: string | null) => {
-    setDismissedError(false);
-    const formulaValue = formula.trim();
-
-    if (formulaValue) {
-      // Non-empty formula → run a server-side text search
-      try {
-        const res = await search({
-          baseId: baseId.trim(),
-          tableId: tableId.trim(),
-          searchText: formulaValue,
-          pageSize: pageSize || 20,
-          offset: offset ?? null,
-        });
-        setSearchResult(res);
-        setFetchResult(null);
-        setActiveSearch(formulaValue);
-        if (!offset) setCurrentPage(1);
-        setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-      } catch {
-        // error managed by hook
-      }
-    } else {
-      // Empty formula → plain record fetch
-      try {
-        const res = await fetch({
-          baseId: baseId.trim(),
-          tableId: tableId.trim(),
-          pageSize: pageSize || 20,
-          offset: offset ?? null,
-          filterByFormula: null,
-        });
-        setFetchResult(res);
-        setActiveSearch(null);
-        setSearchResult(null);
-        if (!offset) setCurrentPage(1);
-        setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-      } catch {
-        // error managed by hook
-      }
-    }
   };
+
+  const isLoading = searchLoading;
 
   const handleSearch = async (searchText: string) => {
     setDismissedError(false);
@@ -126,26 +75,20 @@ export default function AirtableRecordsPage() {
   };
 
   const handleNextPage = async () => {
-    if (!displayedResult?.nextOffset) return;
-    if (activeSearch && searchResult?.nextOffset) {
-      const res = await search({
-        baseId: baseId.trim(),
-        tableId: tableId.trim(),
-        searchText: activeSearch,
-        pageSize: pageSize || 20,
-        offset: searchResult.nextOffset,
-      });
-      setSearchResult(res);
-    } else if (fetchResult?.nextOffset) {
-      await handleFetch(fetchResult.nextOffset);
-    }
+    if (!searchResult?.nextOffset || !activeSearch) return;
+    const res = await search({
+      baseId: baseId.trim(),
+      tableId: tableId.trim(),
+      searchText: activeSearch,
+      pageSize: pageSize || 20,
+      offset: searchResult.nextOffset,
+    });
+    setSearchResult(res);
     setCurrentPage((p) => p + 1);
   };
 
   const handleReset = () => {
-    resetFetch();
     resetSearch();
-    setFetchResult(null);
     setSearchResult(null);
     setActiveSearch(null);
     setCurrentPage(1);
@@ -154,8 +97,8 @@ export default function AirtableRecordsPage() {
   if (!initialized || !user) return null;
 
   const notConnectedGate = !integrationLoading && !isConnected;
-  const canFetch = baseId.trim() && tableId.trim() && !notConnectedGate;
-  const hasResult = !!displayedResult;
+  const canSearch = baseId.trim() && tableId.trim() && !notConnectedGate;
+  const hasResult = !!searchResult;
 
   return (
     <DashboardLayout>
@@ -169,7 +112,7 @@ export default function AirtableRecordsPage() {
             <div>
               <h1 className="text-2xl font-bold text-foreground">Airtable Records</h1>
               <p className="text-muted-foreground text-sm">
-                Fetch and search records from any base and table.
+                Search records in any base and table.
               </p>
             </div>
           </div>
@@ -237,73 +180,22 @@ export default function AirtableRecordsPage() {
               </div>
             </div>
 
-            {/* Advanced toggle */}
-            <div>
-              <button
-                type="button"
-                onClick={() => setShowAdvanced((v) => !v)}
-                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded transition-colors"
-              >
-                {showAdvanced ? (
-                  <ChevronUp className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronDown className="h-3.5 w-3.5" />
-                )}
-                {showAdvanced ? "Hide" : "Show"} Advanced
-              </button>
-              {showAdvanced && (
-                <div className="mt-3 space-y-1.5">
-                  <Label htmlFor="formula">Filter by Formula</Label>
-                  <Input
-                    id="formula"
-                    value={formula}
-                    onChange={(e) => setFormula(e.target.value)}
-                    placeholder={`{Status}="Active"`}
-                    disabled={notConnectedGate}
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3 pt-1">
-              <Button
-                onClick={() => handleFetch()}
-                disabled={!canFetch || fetchLoading || searchLoading}
-                className="focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {(fetchLoading || searchLoading) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {fetchLoading || searchLoading
-                  ? "Loading…"
-                  : formula.trim()
-                  ? "Search Records"
-                  : "Fetch Records"}
-              </Button>
-              {hasResult && (
-                <p className="text-xs text-muted-foreground">
-                  Re-fetch to refresh results
-                </p>
-              )}
-            </div>
+            <AirtableSearchBar
+              onSearch={handleSearch}
+              onClear={handleClearSearch}
+              isLoading={searchLoading}
+              activeSearch={activeSearch}
+              disabled={!canSearch}
+            />
           </CardContent>
         </Card>
 
-        {/* Search bar — shown once a base+table are selected and results exist */}
-        {hasResult && (
-          <AirtableSearchBar
-            onSearch={handleSearch}
-            onClear={handleClearSearch}
-            isLoading={searchLoading}
-            activeSearch={activeSearch}
-            disabled={!canFetch}
-          />
-        )}
-
         {/* Error banner */}
-        {error && !dismissedError && (
+        {searchError && !dismissedError && (
           <ErrorBanner
-            error={error}
+            error={searchError}
             onDismiss={() => setDismissedError(true)}
-            onRetry={activeSearch ? () => handleSearch(activeSearch) : () => handleFetch()}
+            onRetry={() => activeSearch && handleSearch(activeSearch)}
           />
         )}
 
@@ -317,12 +209,12 @@ export default function AirtableRecordsPage() {
         )}
 
         {/* Results */}
-        {displayedResult && (
+        {searchResult && (
           <div ref={resultsRef} className="space-y-4">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="inline-flex items-center rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-                {displayedResult.recordCount}{" "}
-                record{displayedResult.recordCount !== 1 ? "s" : ""} fetched
+                {searchResult.recordCount}{" "}
+                record{searchResult.recordCount !== 1 ? "s" : ""} found
               </span>
               {activeSearch && (
                 <span className="text-xs text-muted-foreground">
@@ -334,10 +226,10 @@ export default function AirtableRecordsPage() {
               )}
             </div>
 
-            <AirtableRecordsTable records={displayedResult.records} />
+            <AirtableRecordsTable records={searchResult.records} />
 
             <AirtablePagination
-              nextOffset={displayedResult.nextOffset}
+              nextOffset={searchResult.nextOffset}
               currentPage={currentPage}
               isLoading={isLoading}
               onNextPage={handleNextPage}
